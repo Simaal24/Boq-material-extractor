@@ -7,8 +7,10 @@ interface ExtractedItem {
   Grade: string;
   Specifications: string;
   Unit: string;
-  Quantity: number;
+  Quantity: string;
   originalRow: string;
+  originalData: any;
+  rowIndex: number;
 }
 
 interface VerificationGridProps {
@@ -71,7 +73,7 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
 
   const handleCellChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>, rowIndex: number, field: keyof ExtractedItem) => {
     const newData = [...rowData];
-    const value = field === 'Quantity' ? parseFloat(e.target.value) || 0 : e.target.value;
+    const value = e.target.value;
     newData[rowIndex] = {
       ...newData[rowIndex],
       [field]: value
@@ -97,19 +99,19 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Material</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Grade</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Specifications</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Original Row</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Material</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Grade</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Specifications</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Original Row</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {rowData.map((row, rowIndex) => (
               <tr key={row.id} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-4 py-4 whitespace-nowrap">
                   <select 
                     value={row.Category} 
                     onChange={(e) => handleCellChange(e, rowIndex, 'Category')} 
@@ -120,7 +122,7 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
                     ))}
                   </select>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-4 py-4 whitespace-nowrap">
                   <select 
                     value={row.Material} 
                     onChange={(e) => handleCellChange(e, rowIndex, 'Material')} 
@@ -131,7 +133,7 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
                     ))}
                   </select>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-4 py-4 whitespace-nowrap">
                   <input 
                     type="text" 
                     value={row.Grade} 
@@ -140,7 +142,7 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
                     placeholder="e.g., M25, Fe500"
                   />
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-4 py-4 whitespace-nowrap">
                   <input 
                     type="text" 
                     value={row.Specifications} 
@@ -149,18 +151,20 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
                     placeholder="Technical specifications"
                   />
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{row.Unit}</td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-700 bg-gray-50">
+                  <span className="font-mono" title="Original unit from BOQ file">{row.Unit}</span>
+                </td>
+                <td className="px-4 py-4 whitespace-nowrap">
                   <input 
-                    type="number" 
+                    type="text" 
                     value={row.Quantity} 
                     onChange={(e) => handleCellChange(e, rowIndex, 'Quantity')} 
-                    className="w-full p-1 border border-gray-300 rounded text-sm focus:ring-teal-500 focus:border-teal-500"
+                    className="w-full p-1 border border-gray-300 rounded text-sm focus:ring-teal-500 focus:border-teal-500 font-mono"
                     placeholder="0"
-                    step="0.01"
+                    title="Original quantity from BOQ file"
                   />
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 max-w-xs truncate" title={row.originalRow}>
+                <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-500 max-w-xs truncate" title={row.originalRow}>
                   {row.originalRow}
                 </td>
               </tr>

@@ -471,18 +471,136 @@ class FixedBOQSummarizer:
         else:
             return f"Rows {', '.join(map(str, valid_rows))}"
 
+    def create_simplified_summary(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Creates a simplified summary with only: Category, Material, Unit, Grade, Quantity
+        """
+        logger.info(f"📊 SIMPLIFIED SUMMARY: Starting with {len(df)} rows")
+        logger.info(f"📊 Input DataFrame columns: {list(df.columns)}")
+        logger.info(f"📊 Sample input data: {df.head(1).to_dict('records') if not df.empty else 'Empty DataFrame'}")
+        
+        # Map frontend column names to our processing (try multiple variations)
+        required_columns = {
+            'Category': 'Category',
+            'Material': 'Material', 
+            'Unit': 'Unit',
+            'Grade': 'Grade',
+            'Quantity': 'Quantity'
+        }
+        
+        # Alternative column name mappings
+        column_alternatives = {
+            'Category': ['Category', 'category', 'CATEGORY', 'final_category', 'Stage3_Final_Category'],
+            'Material': ['Material', 'material', 'MATERIAL', 'final_material', 'Stage3_Final_Material'],
+            'Unit': ['Unit', 'unit', 'UNIT', 'original_unit', 'Original_Unit'],
+            'Grade': ['Grade', 'grade', 'GRADE', 'extracted_grade', 'Stage3_Extracted_Grade'],
+            'Quantity': ['Quantity', 'quantity', 'QUANTITY', 'original_quantity', 'Original_Quantity']
+        }
+        
+        # Check which columns exist (try alternatives)
+        available_cols = {}
+        for frontend_col, expected_col in required_columns.items():
+            found_col = None
+            
+            # Try the expected column first
+            if expected_col in df.columns:
+                found_col = expected_col
+            else:
+                # Try alternatives
+                for alt_col in column_alternatives[frontend_col]:
+                    if alt_col in df.columns:
+                        found_col = alt_col
+                        break
+            
+            if found_col:
+                available_cols[frontend_col] = found_col
+                logger.info(f"✅ Found column: {found_col} (for {frontend_col})")
+            else:
+                logger.warning(f"❌ Missing column: {frontend_col} (tried: {column_alternatives[frontend_col]})")
+        
+        # If we don't have the basic columns, return empty summary
+        if 'Category' not in available_cols or 'Material' not in available_cols:
+            logger.error("❌ Cannot create summary - missing Category or Material columns")
+            return pd.DataFrame(columns=['Category', 'Material', 'Unit', 'Grade', 'Quantity'])
+        
+        # Select and clean the data
+        working_df = df.copy()
+        
+        # Ensure required columns exist with defaults
+        if 'Unit' not in available_cols:
+            working_df['Unit'] = 'Each'
+            available_cols['Unit'] = 'Unit'
+            
+        if 'Grade' not in available_cols:
+            working_df['Grade'] = ''
+            available_cols['Grade'] = 'Grade'
+            
+        if 'Quantity' not in available_cols:
+            working_df['Quantity'] = 0
+            available_cols['Quantity'] = 'Quantity'
+        
+        # Convert quantity to numeric
+        working_df[available_cols['Quantity']] = pd.to_numeric(
+            working_df[available_cols['Quantity']], errors='coerce'
+        ).fillna(0)
+        
+        # Clean empty/null values
+        for col in ['Category', 'Material', 'Unit', 'Grade']:
+            if col in available_cols:
+                working_df[available_cols[col]] = working_df[available_cols[col]].fillna('').astype(str)
+        
+        # Group by Category, Material, Unit, Grade and sum quantities
+        group_cols = [
+            available_cols['Category'],
+            available_cols['Material'], 
+            available_cols['Unit'],
+            available_cols['Grade']
+        ]
+        
+        logger.info(f"📊 Grouping by: {group_cols}")
+        
+        summary_df = working_df.groupby(group_cols, as_index=False, dropna=False).agg({
+            available_cols['Quantity']: 'sum'
+        })
+        
+        # Rename columns to standard names
+        summary_df = summary_df.rename(columns={
+            available_cols['Category']: 'Category',
+            available_cols['Material']: 'Material',
+            available_cols['Unit']: 'Unit', 
+            available_cols['Grade']: 'Grade',
+            available_cols['Quantity']: 'Quantity'
+        })
+        
+        # Sort by category priority, then by material
+        def get_category_priority(category):
+            return self.category_priority.get(category, 999)
+        
+        summary_df['_sort_priority'] = summary_df['Category'].apply(get_category_priority)
+        summary_df = summary_df.sort_values(['_sort_priority', 'Material', 'Grade']).drop('_sort_priority', axis=1)
+        
+        # Filter out zero quantities
+        summary_df = summary_df[summary_df['Quantity'] > 0]
+        
+        logger.info(f"📊 SIMPLIFIED SUMMARY: Created {len(summary_df)} material groups")
+        logger.info(f"📊 Total Quantity: {summary_df['Quantity'].sum()}")
+        
+        return summary_df
+
 
 def generate_summary_dataframe(data_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Takes a DataFrame of corrected data and generates a material summary.
+    Takes a DataFrame of corrected data and generates a simplified material summary.
+    
+    Summarizes by: Category, Material, Unit, Grade, Quantity (no specifications or amounts)
 
     Args:
         data_df: The user-verified BOQ data.
 
     Returns:
-        A pandas DataFrame containing the final material summary.
+        A pandas DataFrame containing the simplified material summary.
     """
     summarizer = FixedBOQSummarizer()
-    # This method already does the grouping and aggregation we need
-    summary_df = summarizer.create_material_summary_sheet_fixed(data_df)
+    # Use the new simplified method
+    summary_df = summarizer.create_simplified_summary(data_df)
     return summary_df

@@ -14,7 +14,7 @@ class ProcessingChunk:
     """Represents a chunk of BOQ items to be processed together"""
     chunk_id: int
     header_info: Dict
-    items: List[Tuple[int, str, str]]  # (row_index, description, unit)
+    items: List[Tuple[int, str, str, str]]  # (row_index, description, unit, quantity)
     context_hint: str
     estimated_complexity: int
     header_specifications: Dict = field(default_factory=dict)
@@ -55,6 +55,7 @@ class ExtractedLineItem:
     original_row_index: int
     original_description: str
     original_unit: str
+    original_quantity: str  # NEW: Preserve original quantity from BOQ
     chunk_id: int
     final_category: str
     final_material: str

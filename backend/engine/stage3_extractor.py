@@ -222,19 +222,27 @@ class Stage3EnhancedContextInheritance:
         
         # Pre-process items to detect location-only lines
         processed_items = []
-        for i, (row_idx, desc, unit) in enumerate(batch_items):
+        for i, item_tuple in enumerate(batch_items):
+            # Handle both old (3-item) and new (4-item) tuple formats
+            if len(item_tuple) == 4:
+                row_idx, desc, unit, quantity = item_tuple
+            else:
+                row_idx, desc, unit = item_tuple
+                quantity = ""
+            
             is_location_only = is_location_only_line(desc)
             processed_items.append({
                 "item_id": i + 1,
                 "row_index": row_idx,
                 "description": desc,
                 "unit": unit or "N/A",
+                "quantity": quantity or "N/A",
                 "is_location_only": is_location_only
             })
         
         # Build simplified prompt focusing on INHERITANCE FIRST
         items_text = "\n".join([
-            f"Item {item['item_id']} (Row {item['row_index']}): \"{item['description']}\" | Unit: \"{item['unit']}\" | Location-only: {item['is_location_only']}"
+            f"Item {item['item_id']} (Row {item['row_index']}): \"{item['description']}\" | Unit: \"{item['unit']}\" | Quantity: \"{item['quantity']}\" | Location-only: {item['is_location_only']}"
             for item in processed_items
         ])
         
@@ -269,7 +277,13 @@ class Stage3EnhancedContextInheritance:
             
             for j, item_data in enumerate(response_list):
                 if j < len(batch_items):
-                    row_idx, description, unit = batch_items[j]
+                    # Handle both old (3-item) and new (4-item) tuple formats
+                    item_tuple = batch_items[j]
+                    if len(item_tuple) == 4:
+                        row_idx, description, unit, quantity = item_tuple
+                    else:
+                        row_idx, description, unit = item_tuple
+                        quantity = ""
                     
                     # Enhanced inheritance tracking
                     context_inherited = item_data.get('context_inheritance_applied', True)
@@ -300,6 +314,7 @@ class Stage3EnhancedContextInheritance:
                         original_row_index=row_idx, 
                         original_description=description, 
                         original_unit=unit,
+                        original_quantity=quantity,
                         chunk_id=chunk_info['chunk_id'], 
                         final_category=item_data.get('final_category', verified_header.verified_category),
                         final_material=item_data.get('final_material', verified_header.verified_material),
@@ -333,7 +348,13 @@ class Stage3EnhancedContextInheritance:
         logger.info(f"🔧 STRICT INHERITANCE FALLBACK: All {len(batch_items)} items will inherit header context")
         
         fallback_items = []
-        for row_idx, description, unit in batch_items:
+        for item_tuple in batch_items:
+            # Handle both old (3-item) and new (4-item) tuple formats
+            if len(item_tuple) == 4:
+                row_idx, description, unit, quantity = item_tuple
+            else:
+                row_idx, description, unit = item_tuple
+                quantity = ""
             try:
                 # ✅ CRITICAL: Always inherit from header in fallback - context never lost
                 category = verified_header.verified_category  # Never change this
@@ -367,6 +388,7 @@ class Stage3EnhancedContextInheritance:
                     original_row_index=row_idx, 
                     original_description=description, 
                     original_unit=unit,
+                    original_quantity=quantity,
                     chunk_id=chunk_info['chunk_id'], 
                     final_category=category,
                     final_material=material, 
@@ -394,6 +416,7 @@ class Stage3EnhancedContextInheritance:
                     original_row_index=row_idx, 
                     original_description=description, 
                     original_unit=unit,
+                    original_quantity=quantity,
                     chunk_id=chunk_info['chunk_id'], 
                     final_category=verified_header.verified_category,
                     final_material=verified_header.verified_material, 

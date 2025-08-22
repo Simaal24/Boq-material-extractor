@@ -9,6 +9,7 @@ import asyncio
 import time
 import json
 import logging
+import threading
 from typing import Optional, Dict, Any
 
 try:
@@ -25,7 +26,7 @@ class RateLimiter:
     def __init__(self, max_requests_per_minute: int = 900):
         self.max_requests = max_requests_per_minute
         self.request_times = []
-        self.lock = asyncio.Lock()
+        self.lock = asyncio.Lock()  # Use asyncio.Lock for async context
         logger.info(f"🚦 Rate Limiter: {max_requests_per_minute} requests/minute max")
     
     async def acquire(self):
@@ -74,13 +75,21 @@ class GeminiClient:
         genai.configure(api_key=api_key)
         
         # Initialize model with optimal settings for BOQ processing
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+        
         self.model = genai.GenerativeModel(
             'gemini-2.5-flash',
             generation_config=genai.GenerationConfig(
                 temperature=0.1,  # Low temperature for consistent results
-                max_output_tokens=8192,
+                max_output_tokens=16384,  # Increased for longer responses
                 response_mime_type="application/json"  # Force JSON responses
-            )
+            ),
+            safety_settings=safety_settings
         )
         
         # Initialize rate limiter
@@ -101,7 +110,7 @@ class GeminiClient:
         Returns:
             Parsed JSON response from Gemini, or None if failed
         """
-        base_delay = 1.0
+        base_delay = 0.5  # Faster retries
         
         for attempt in range(max_retries + 1):
             try:
@@ -118,11 +127,32 @@ class GeminiClient:
                 response = await self.model.generate_content_async(prompt)
                 self.api_calls += 1
                 
-                if not response.text:
-                    raise ValueError("Empty response from Gemini")
+                # Check response validity
+                if not response.candidates:
+                    raise ValueError("No candidates in Gemini response")
+                
+                candidate = response.candidates[0]
+                if candidate.finish_reason != 1:  # 1 = STOP (successful completion)
+                    finish_reasons = {
+                        0: "FINISH_REASON_UNSPECIFIED",
+                        1: "STOP", 
+                        2: "MAX_TOKENS",
+                        3: "SAFETY",
+                        4: "RECITATION",
+                        5: "OTHER"
+                    }
+                    reason_name = finish_reasons.get(candidate.finish_reason, f"UNKNOWN({candidate.finish_reason})")
+                    raise ValueError(f"Gemini stopped with reason: {reason_name} ({candidate.finish_reason})")
+                
+                if not hasattr(candidate.content, 'parts') or not candidate.content.parts:
+                    raise ValueError("No content parts in Gemini response")
+                
+                response_text = candidate.content.parts[0].text
+                if not response_text:
+                    raise ValueError("Empty response text from Gemini")
                 
                 # Parse JSON response
-                parsed_response = self._parse_json_response(response.text)
+                parsed_response = self._parse_json_response(response_text)
                 
                 if parsed_response is not None:
                     logger.debug(f"✅ Gemini API call successful")
@@ -256,6 +286,7 @@ async def generate_content(prompt: str, max_retries: int = 3) -> Optional[Dict[s
     Returns:
         Parsed JSON response from Gemini, or None if failed
     """
+    # Ensure we have a client
     client = get_client()
     if client is None:
         logger.error("❌ Cannot generate content: Gemini client not initialized")

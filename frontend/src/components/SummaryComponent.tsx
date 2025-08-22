@@ -4,18 +4,16 @@ interface SummaryItem {
   Category: string;
   Material: string;
   Grade: string;
-  Specifications: string;
   Unit: string;
-  summedQuantity: number;
-  summedAmount: number;
+  Quantity: number;
 }
 
 interface SummaryComponentProps {
   summaryData: {
-    summary: SummaryItem[];
+    summary?: SummaryItem[];
+    summary_data?: any[];
     timestamp?: string;
     summary_groups?: number;
-    total_amount?: number;
     total_quantity?: number;
     input_rows?: number;
   };
@@ -24,8 +22,7 @@ interface SummaryComponentProps {
 
 const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onReset }) => {
   // Handle case where summaryData might not have the expected structure
-  const summaryItems = summaryData?.summary || [];
-  const totalAmount = summaryData?.total_amount || 0;
+  const summaryItems = summaryData?.summary || summaryData?.summary_data || [];
   const totalQuantity = summaryData?.total_quantity || 0;
   const summaryGroups = summaryData?.summary_groups || summaryItems.length;
 
@@ -34,7 +31,7 @@ const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onRese
       <h2 className="text-3xl font-bold text-gray-800 mb-4">Summary Generated Successfully!</h2>
       
       <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
           <div className="bg-teal-50 rounded-lg p-4">
             <h3 className="text-lg font-semibold text-teal-800">Material Groups</h3>
             <p className="text-2xl font-bold text-teal-600">{summaryGroups}</p>
@@ -42,12 +39,6 @@ const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onRese
           <div className="bg-blue-50 rounded-lg p-4">
             <h3 className="text-lg font-semibold text-blue-800">Total Quantity</h3>
             <p className="text-2xl font-bold text-blue-600">{totalQuantity.toFixed(2)}</p>
-          </div>
-          <div className="bg-green-50 rounded-lg p-4">
-            <h3 className="text-lg font-semibold text-green-800">Total Amount</h3>
-            <p className="text-2xl font-bold text-green-600">
-              {totalAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
-            </p>
           </div>
         </div>
       </div>
@@ -59,11 +50,9 @@ const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onRese
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Material</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Grade</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Specifications</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Summed Quantity</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Summed Amount</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Grade</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -71,14 +60,10 @@ const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onRese
                 <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{row.Category}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{row.Material}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{row.Grade}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{row.Specifications}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{row.Unit}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{row.Grade}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium">
-                    {row.summedQuantity.toFixed(2)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right font-medium">
-                    {row.summedAmount.toLocaleString('en-IN', { style: 'currency', currency: 'INR' })}
+                    {typeof row.Quantity === 'number' ? row.Quantity.toFixed(2) : row.Quantity || 0}
                   </td>
                 </tr>
               ))}

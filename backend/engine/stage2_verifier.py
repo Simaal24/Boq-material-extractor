@@ -119,18 +119,37 @@ class Stage2EnhancedHeaderVerifier:
             logger.warning("🧠 No headers found in registry for verification")
             return []
 
-        # Convert header registry to verification list
+        # Convert header registry to verification list - handle both dict and list formats
         headers_for_verification = []
-        for row_idx, header_info in header_registry.items():
-            headers_for_verification.append({
-                'header_text': header_info['header_text'],
-                'rule_category': header_info['stage1_category'],
-                'rule_material': header_info['stage1_material'],
-                'confidence': 85.0, 
-                'chunk_id': header_info['chunk_id'],
-                'header_row': header_info['row_index'],
-                'header_specifications': header_info.get('header_specifications', {})
-            })
+        
+        logger.info(f"🔍 STAGE 2 DEBUG: Received header_registry type = {type(header_registry)}")
+        logger.info(f"🔍 STAGE 2 DEBUG: header_registry length = {len(header_registry)}")
+        
+        # Handle both dictionary (original) and list (from orchestrator) formats
+        if isinstance(header_registry, dict):
+            # Original format: {row_idx: header_info, ...}
+            for row_idx, header_info in header_registry.items():
+                headers_for_verification.append({
+                    'header_text': header_info['header_text'],
+                    'rule_category': header_info['stage1_category'],
+                    'rule_material': header_info['stage1_material'],
+                    'confidence': 85.0,
+                    'row_idx': row_idx,
+                    'chunk_id': header_info.get('chunk_id', row_idx)
+                })
+        else:
+            # New format: [header_info, header_info, ...] (list of dicts)
+            for i, header_info in enumerate(header_registry):
+                if isinstance(header_info, dict):
+                    headers_for_verification.append({
+                        'header_text': header_info['header_text'],
+                        'rule_category': header_info['stage1_category'],
+                        'rule_material': header_info['stage1_material'],
+                        'confidence': 85.0,
+                        'chunk_id': header_info['chunk_id'],
+                        'header_row': header_info['row_index'],
+                        'header_specifications': header_info.get('header_specifications', {})
+                    })
 
         # Create batches
         all_batches = []

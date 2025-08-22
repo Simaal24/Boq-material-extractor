@@ -40,7 +40,7 @@ function App() {
       
       console.log('Extraction successful:', response.data);
       
-      // Simple data transformation
+      // Simplified data transformation using original BOQ data directly
       const items: any[] = [];
       const extractionData = response?.data?.extraction_data;
       if (extractionData && typeof extractionData === 'object') {
@@ -53,10 +53,12 @@ function App() {
                 Material: item?.final_material || 'Mixed Materials',
                 Grade: item?.extracted_grade || '',
                 Specifications: item?.technical_specs || item?.extracted_dimensions || '',
-                Unit: item?.original_unit || 'Each',
-                Quantity: 0, // This will be editable for user input
-                OriginalQuantity: item?.original_quantity || 'N/A', // Read-only original
-                originalRow: item?.original_description || ''
+                Unit: item?.original_unit || 'Each', // Use original unit directly
+                Quantity: item?.original_quantity || '', // Use original quantity directly
+                originalRow: item?.original_description || '',
+                // Store all original data for verification
+                originalData: item?.original_data || {},
+                rowIndex: item?.original_row_index || index
               });
             });
           }

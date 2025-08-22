@@ -26,9 +26,7 @@ from .pre_processor import run_initial_analysis
 # Import Stage 1 detector components
 from .stage1_detector import (
     Stage1EnhancedHeaderDetector,
-    run_stage1_detection,
-    find_description_column,
-    find_unit_column
+    run_stage1_detection
 )
 
 # Import Stage 2 verifier components
@@ -89,8 +87,6 @@ __all__ = [
     'run_initial_analysis',
     'Stage1EnhancedHeaderDetector',
     'run_stage1_detection',
-    'find_description_column',
-    'find_unit_column',
     'Stage2EnhancedHeaderVerifier',
     'run_stage2_verification',
     'Stage3EnhancedContextInheritance',

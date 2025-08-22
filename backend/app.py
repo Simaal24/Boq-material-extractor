@@ -59,6 +59,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Ensure all engine modules show INFO level logs
+logging.getLogger('engine.orchestrator').setLevel(logging.INFO)
+logging.getLogger('engine.stage1_detector').setLevel(logging.INFO)
+logging.getLogger('engine.stage2_verifier').setLevel(logging.INFO)
+logging.getLogger('engine.stage3_extractor').setLevel(logging.INFO)
+logging.getLogger('engine.pre_processor').setLevel(logging.INFO)
+
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend integration
@@ -259,18 +266,23 @@ def upload_file():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         
         file.save(file_path)
-        logger.info(f"File uploaded successfully: {unique_filename}")
+        logger.info(f"📁 File uploaded successfully: {unique_filename}")
+        logger.info(f"📁 File saved to: {file_path}")
         
         # FIXED: Ensure API key is passed to pre-processor
         api_key = app.config['GEMINI_API_KEY']
         if not api_key:
             logger.warning("⚠️ API key missing - pre-processor will run without AI features")
+        else:
+            logger.info(f"🤖 API key available for AI processing")
         
         # Run initial analysis using our refactored engine
+        logger.info(f"🚀 Starting initial BOQ analysis for: {unique_filename}")
         analysis_result = run_initial_analysis(
             file_path=file_path,
             gemini_api_key=api_key
         )
+        logger.info(f"✅ Initial analysis complete for: {unique_filename}")
         
         # Serialize the result for JSON response
         serialized_result = serialize_analysis_result(analysis_result)
@@ -357,15 +369,19 @@ def extract_boq():
         if not app.config['GEMINI_API_KEY']:
             return jsonify({"error": "Gemini API key not configured. Please check your .env file."}), 500
         
-        logger.info(f"🚀 Starting extraction for sheets: {selected_worksheets}")
+        logger.info(f"🚀 Starting 3-stage BOQ extraction for sheets: {selected_worksheets}")
+        logger.info(f"📄 Processing file: {file_path}")
         
         # Run the complete BOQ processing pipeline using orchestrator
+        logger.info(f"🔄 Initializing async event loop for parallel processing...")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            logger.info(f"🚀 Running complete BOQ processing pipeline...")
             results = loop.run_until_complete(
                 run_complete_boq_processing(file_path, selected_worksheets, app.config['GEMINI_API_KEY'])
             )
+            logger.info(f"✅ BOQ processing pipeline completed")
         finally:
             loop.close()
         
@@ -377,6 +393,10 @@ def extract_boq():
         extraction_results = results.get("extraction_results", {})
         overall_stats = results.get("overall_stats", {})
         
+        logger.info(f"📊 EXTRACTION RESULTS SUMMARY:")
+        logger.info(f"   📋 Sheets processed: {overall_stats.get('total_sheets_processed', 0)}/{overall_stats.get('total_sheets_requested', 0)}")
+        logger.info(f"   📊 Success rate: {overall_stats.get('processing_success_rate', 0):.1%}")
+        
         # Format response for frontend
         extracted_tables = []
         total_rows = 0
@@ -386,6 +406,8 @@ def extract_boq():
                 data_items = sheet_result.get("data", [])
                 stats = sheet_result.get("stats", {})
                 
+                logger.info(f"   ✅ Sheet '{sheet_name}': {len(data_items)} items extracted")
+                
                 table_data = {
                     "worksheet_name": sheet_name,
                     "data_count": len(data_items),
@@ -394,6 +416,8 @@ def extract_boq():
                 }
                 extracted_tables.append(table_data)
                 total_rows += len(data_items)
+            else:
+                logger.warning(f"   ❌ Sheet '{sheet_name}': {sheet_result.get('error', 'Unknown error')}")
         
         logger.info(f"✅ Extraction complete: {overall_stats.get('total_sheets_processed', 0)} sheets, {total_rows} total items")
         
@@ -453,9 +477,25 @@ def summarize_results():
             return jsonify({"error": "No verified data provided"}), 400
         
         logger.info(f"📊 Generating summary for {len(corrected_data)} verified items")
+        logger.info(f"📊 Sample data: {corrected_data[0] if corrected_data else 'No data'}")
+        logger.info(f"📊 Data columns: {list(corrected_data[0].keys()) if corrected_data else 'No columns'}")
+        
+        # Sanitize corrected_data to ensure JSON serializable types
+        sanitized_data = []
+        for item in corrected_data:
+            sanitized_item = {}
+            for key, value in item.items():
+                # Convert pandas/numpy types to native Python types
+                if hasattr(value, 'item'):  # numpy/pandas scalar
+                    sanitized_item[key] = value.item()
+                elif pd.isna(value):  # Handle NaN values
+                    sanitized_item[key] = None
+                else:
+                    sanitized_item[key] = value
+            sanitized_data.append(sanitized_item)
         
         # Generate the summary Excel file using orchestrator
-        excel_file = generate_summary_file(corrected_data)
+        excel_file = generate_summary_file(sanitized_data)
         
         # For now, we'll save it temporarily and provide download info
         # In a production app, you might store this in cloud storage
@@ -467,33 +507,38 @@ def summarize_results():
         with open(temp_path, 'wb') as f:
             f.write(excel_file.getvalue())
         
-        # Calculate summary statistics
+        # Calculate summary statistics (simplified - no amounts)
         summary_groups = 0
-        total_quantity = 0
-        total_amount = 0
+        total_quantity = 0.0
+        summary_df = pd.DataFrame()  # Initialize empty DataFrame
         
-        if corrected_data:
-            df = pd.DataFrame(corrected_data)
+        if sanitized_data:
+            df = pd.DataFrame(sanitized_data)
             summary_df = generate_summary_dataframe(df)
-            summary_groups = len(summary_df) - 1  # Exclude totals row
+            summary_groups = int(len(summary_df))  # All rows are material groups (no totals row)
             
-            # Try to extract totals
-            if 'OVERALL QTY' in summary_df.columns:
-                total_quantity = summary_df['OVERALL QTY'].sum()
-            if 'TOTAL AMOUNT' in summary_df.columns:
-                total_amount = summary_df['TOTAL AMOUNT'].sum()
+            # Extract total quantity (convert to native Python types for JSON serialization)
+            if 'Quantity' in summary_df.columns:
+                qty_sum = summary_df['Quantity'].sum()
+                total_quantity = float(qty_sum) if not pd.isna(qty_sum) else 0.0
         
-        logger.info(f"✅ Summary generated: {summary_groups} groups, {total_quantity} total qty, {total_amount} total amount")
+        logger.info(f"✅ Simplified summary generated: {summary_groups} material groups, {total_quantity} total quantity")
+        
+        # Convert summary DataFrame to JSON-serializable format for frontend display
+        summary_data = []
+        if not summary_df.empty:
+            summary_data = summary_df.to_dict('records')
+            logger.info(f"📊 Summary data for frontend: {len(summary_data)} records")
         
         return jsonify({
-            "message": "Material summary generated successfully",
+            "message": "Simplified material summary generated successfully",
             "summary_groups": summary_groups,
-            "total_amount": total_amount,
             "total_quantity": total_quantity,
-            "input_rows": len(corrected_data),
+            "input_rows": len(sanitized_data),
             "ready_for_download": True,
             "download_url": f"/api/download/{temp_filename}",
-            "file_name": temp_filename
+            "file_name": temp_filename,
+            "summary_data": summary_data  # Add actual summary data for frontend
         })
         
     except Exception as e:

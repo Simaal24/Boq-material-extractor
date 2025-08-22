@@ -14,7 +14,7 @@ import re
 import json
 import os
 from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 import logging
 from pathlib import Path
 import requests
@@ -60,6 +60,8 @@ class WorksheetAnalysis:
     data_density: float
     has_wrapped_text: bool
     ai_analysis: Optional[Dict]
+    # NEW: Mandatory column mappings for BOQ processing
+    column_mappings: Dict = field(default_factory=dict)
 
 @dataclass
 class BOQTable:
@@ -121,11 +123,11 @@ class AdvancedBOQExtractor:
                 r'(?i)(cost|total\s*cost)',
             ],
             'grade': [
-                r'(?i)(grade|grade\s*of\s*conc|concrete\s*grade)',
+                r'(?i)(grade|grade\s*of\s*conc|concrete\s*grade|grade\s*of\s*concrete)',
                 r'(?i)(class|type|category)',
             ],
             'cement': [
-                r'(?i)(cement\s*co-?eff|cement\s*coefficient|cement)',
+                r'(?i)(cement\s*co-?eff|cement\s*coefficient|cement|ceff|c\s*eff)',
             ],
             'remarks': [
                 r'(?i)(remarks|notes|comments|observations)',
@@ -237,13 +239,137 @@ class AdvancedBOQExtractor:
         logger.info(f"Found {len(wrapped_content)} cells with wrapped text")
         return wrapped_content
     
+    def identify_mandatory_columns(self, df: pd.DataFrame, sheet_name: str) -> Dict:
+        """Mandate identification of description, unit, and quantity columns"""
+        logger.info(f"🔍 MANDATORY COLUMN DETECTION: Analyzing '{sheet_name}' for required BOQ columns")
+        
+        column_mappings = {
+            "description_column": None,
+            "unit_column": None, 
+            "quantity_column": None,
+            "validation_status": "FAILED",
+            "error_message": ""
+        }
+        
+        # 1. Find Description Column (MANDATORY)
+        desc_patterns = ['description', 'item description', 'work description', 'particulars', 'activity', 'task', 'work item', 'specification']
+        desc_col = None
+        
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if any(desc_name in col_lower for desc_name in desc_patterns):
+                desc_col = col
+                logger.info(f"✅ DESCRIPTION COLUMN FOUND: '{col}'")
+                break
+        
+        if not desc_col:
+            # Fallback: longest text column
+            text_columns = [col for col in df.columns if df[col].dtype == 'object']
+            if text_columns:
+                text_lengths = {col: df[col].astype(str).str.len().mean() for col in text_columns}
+                desc_col = max(text_lengths, key=text_lengths.get)
+                logger.warning(f"⚠️ DESCRIPTION COLUMN (fallback): '{desc_col}'")
+        
+        if not desc_col:
+            column_mappings["error_message"] = "No description column found"
+            return column_mappings
+        
+        column_mappings["description_column"] = desc_col
+        
+        # 2. Find Unit Column (MANDATORY)
+        unit_patterns = ['unit', 'uom', 'u.o.m', 'units', 'unit of measurement', 'measure']
+        unit_col = None
+        
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if any(unit_name in col_lower for unit_name in unit_patterns):
+                unit_col = col
+                logger.info(f"✅ UNIT COLUMN FOUND: '{col}'")
+                break
+        
+        if not unit_col:
+            # Look for short text columns with unit-like values
+            for col in df.columns:
+                if df[col].dtype == 'object' and col != desc_col:
+                    avg_length = df[col].astype(str).str.len().mean()
+                    if avg_length < 10:  # Short text
+                        sample_values = df[col].dropna().astype(str).str.lower().unique()[:10]
+                        unit_indicators = ['cum', 'sqm', 'mt', 'kg', 'nos', 'rmt', 'ltr', 'm', 'each', 'nos.', 'sq.m', 'cu.m']
+                        if any(any(indicator in val for indicator in unit_indicators) for val in sample_values):
+                            unit_col = col
+                            logger.info(f"✅ UNIT COLUMN DETECTED (by pattern): '{col}'")
+                            break
+        
+        if not unit_col:
+            column_mappings["error_message"] = f"No unit column found in sheet '{sheet_name}'"
+            return column_mappings
+        
+        column_mappings["unit_column"] = unit_col
+        
+        # 3. Find Quantity Column (MANDATORY)
+        qty_patterns = ['qty', 'quantity', 'cumulative', 'overall qty', 'total qty', 'volume', 'count', 'number', 'overall', 'cum qty']
+        qty_col = None
+        
+        for col in df.columns:
+            col_lower = str(col).lower().strip()
+            if any(qty_name in col_lower for qty_name in qty_patterns):
+                qty_col = col
+                logger.info(f"✅ QUANTITY COLUMN FOUND: '{col}'")
+                break
+        
+        if not qty_col:
+            # Look for numeric columns
+            numeric_cols = df.select_dtypes(include=['int64', 'float64', 'Int64', 'Float64']).columns
+            for col in numeric_cols:
+                if col not in [desc_col, unit_col]:
+                    # Check if values look like quantities
+                    sample_values = df[col].dropna().head(10)
+                    if len(sample_values) > 0 and all(val >= 0 for val in sample_values):
+                        qty_col = col
+                        logger.info(f"✅ QUANTITY COLUMN DETECTED (numeric): '{col}'")
+                        break
+        
+        if not qty_col:
+            # Look for text columns with numeric content
+            for col in df.columns:
+                if df[col].dtype == 'object' and col not in [desc_col, unit_col]:
+                    numeric_count = 0
+                    total_count = 0
+                    for value in df[col].dropna().head(10):
+                        total_count += 1
+                        try:
+                            float(str(value).replace(',', ''))
+                            numeric_count += 1
+                        except:
+                            pass
+                    
+                    if total_count > 0 and numeric_count / total_count > 0.7:
+                        qty_col = col
+                        logger.info(f"✅ QUANTITY COLUMN DETECTED (text-numeric): '{col}'")
+                        break
+        
+        if not qty_col:
+            column_mappings["error_message"] = f"No quantity column found in sheet '{sheet_name}'"
+            return column_mappings
+        
+        column_mappings["quantity_column"] = qty_col
+        column_mappings["validation_status"] = "SUCCESS"
+        
+        logger.info(f"🎉 MANDATORY COLUMNS IDENTIFIED for '{sheet_name}':")
+        logger.info(f"   📝 Description: '{desc_col}'")
+        logger.info(f"   📏 Unit: '{unit_col}'") 
+        logger.info(f"   🔢 Quantity: '{qty_col}'")
+        
+        return column_mappings
+
     def analyze_worksheet_structure(self, ws, sheet_name: str, file_path: str) -> WorksheetAnalysis:
         """Comprehensive analysis of worksheet structure"""
-        logger.info(f"Analyzing worksheet: {sheet_name}")
+        logger.info(f"📊 WORKSHEET ANALYSIS: Starting analysis of '{sheet_name}'")
         
         # Basic dimensions
         max_row = ws.max_row
         max_col = ws.max_column
+        logger.info(f"📊 Worksheet dimensions: {max_row} rows × {max_col} columns")
         
         # Frozen panes
         frozen_panes = str(ws.freeze_panes) if ws.freeze_panes else None
@@ -261,6 +387,7 @@ class AdvancedBOQExtractor:
         total_cells = max_row * max_col
         filled_cells = sum(1 for row in ws.iter_rows() for cell in row if cell.value is not None)
         data_density = filled_cells / total_cells if total_cells > 0 else 0
+        logger.info(f"📊 Data density: {filled_cells}/{total_cells} cells filled ({data_density:.1%})")
         
         # Read data for analysis with better error handling
         try:
@@ -271,32 +398,49 @@ class AdvancedBOQExtractor:
             # Create empty dataframe as fallback
             df = pd.DataFrame()
         
-        # Find suspected headers
-        suspected_headers = self.find_all_potential_headers(df, sheet_name) if not df.empty else []
+        # Column mappings will be determined by AI during header selection
         
-        # Use AI to select the best header from top 2 candidates
-        selected_header = self.ai_select_best_header(suspected_headers, sheet_name)
+        # Find suspected headers
+        suspected_headers = self.find_all_potential_headers(df, sheet_name)
+        
+        # Use AI to select the best header from top 2 candidates and get column mappings
+        selected_header, ai_column_mappings = self.ai_select_best_header(suspected_headers, sheet_name)
+        
+        # Use AI column mappings if available, otherwise fall back to manual detection
+        if ai_column_mappings.get("validation_status") == "SUCCESS":
+            logger.info(f"🎯 USING AI-IDENTIFIED COLUMN MAPPINGS for '{sheet_name}'")
+            column_mappings = ai_column_mappings
+        else:
+            logger.warning(f"⚠️ AI column mappings failed, falling back to manual detection for '{sheet_name}'")
+            column_mappings = self.identify_mandatory_columns(df, sheet_name) if not df.empty else {"validation_status": "FAILED", "error_message": "Empty dataframe"}
         
         # Only create BOQ region for the AI-selected header
         boq_regions = []
         if selected_header:
             header_row, headers, confidence = selected_header
+            logger.info(f"📊 Creating BOQ region for selected header at row {header_row+1}")
             
             # Find data boundaries for the selected header
             start_row, end_row = self.extract_table_boundaries(df, header_row)
+            logger.info(f"📊 Table boundaries: data rows {start_row+1} to {end_row+1}")
             
             if end_row >= start_row:
+                data_rows_count = end_row - start_row + 1
                 region = {
                     'header_row': header_row,
                     'start_row': start_row,
                     'end_row': end_row,
                     'headers': headers,
                     'confidence': confidence,
-                    'data_rows': end_row - start_row + 1,
+                    'data_rows': data_rows_count,
                     'ai_selected': True  # Mark as AI-selected
                 }
                 boq_regions.append(region)
-                logger.info(f"AI-selected header created 1 BOQ region with {region['data_rows']} data rows")
+                logger.info(f"✅ Created BOQ region with {data_rows_count} data rows")
+            else:
+                logger.warning(f"⚠️ Invalid table boundaries (start:{start_row}, end:{end_row}) - no BOQ region created")
+        else:
+            logger.warning(f"⚠️ No header selected for sheet '{sheet_name}' - no BOQ regions created")
         
         analysis = WorksheetAnalysis(
             name=sheet_name,
@@ -307,7 +451,8 @@ class AdvancedBOQExtractor:
             boq_regions=boq_regions,  # Only 1 region max
             data_density=data_density,
             has_wrapped_text=has_wrapped_text,
-            ai_analysis=None
+            ai_analysis=None,
+            column_mappings=column_mappings  # Store the mandatory column mappings
         )
         
         # Simple AI analysis if enabled
@@ -343,31 +488,37 @@ class AdvancedBOQExtractor:
     
     def find_all_potential_headers(self, df: pd.DataFrame, sheet_name: str) -> List[Tuple[int, List[str], float]]:
         """Better header detection with realistic confidence scores"""
+        logger.info(f"🔍 HEADER DETECTION: Starting header search in sheet '{sheet_name}' (rows: {len(df)})")
         potential_headers = []
         
         # Search through first 25 rows for headers
         search_range = min(25, len(df))
+        logger.info(f"🔍 HEADER DETECTION: Scanning first {search_range} rows for header patterns")
         
         for idx in range(search_range):
             row_data = df.iloc[idx].astype(str).fillna('')
             
             if row_data.str.strip().eq('').all():  # Skip completely empty rows
+                logger.debug(f"🔍 Row {idx+1}: EMPTY - skipping")
                 continue
             
             # Get non-empty values for analysis
             non_empty_values = [cell for cell in row_data if cell and str(cell).strip() and str(cell).strip() != 'nan']
+            logger.debug(f"🔍 Row {idx+1}: Found {len(non_empty_values)} non-empty cells: {non_empty_values[:3]}...")
             
             if len(non_empty_values) < 2:  # Headers should have at least 2 columns
+                logger.debug(f"🔍 Row {idx+1}: INSUFFICIENT DATA - need at least 2 columns")
                 continue
             
             # Better filter for data rows
             if self.is_likely_data_row(non_empty_values):
-                logger.debug(f"Skipping row {idx+1} - looks like data: {non_empty_values[:3]}")
+                logger.debug(f"🔍 Row {idx+1}: DATA ROW - skipping: {non_empty_values[:3]}")
                 continue
             
             # Better pattern matching
             score = 0
             matched_patterns = []
+            logger.debug(f"🔍 Row {idx+1}: HEADER CANDIDATE - analyzing {len(non_empty_values)} cells for BOQ patterns")
             
             # Check each cell against BOQ patterns
             for cell_value in row_data:
@@ -378,6 +529,7 @@ class AdvancedBOQExtractor:
                             if re.search(pattern, cell_str):
                                 score += 1
                                 matched_patterns.append(pattern_name)
+                                logger.debug(f"🔍 Row {idx+1}: Found '{pattern_name}' pattern in '{cell_str[:20]}'")
                                 break
             
             # More realistic confidence calculation
@@ -404,10 +556,23 @@ class AdvancedBOQExtractor:
                 # Cap at 0.9 (never 1.0 without AI validation)
                 confidence = min(confidence, 0.9)
                 
-                if confidence > 0.25:  # Lower threshold but more realistic scoring
+                # Special boost for headers with key BOQ indicators
+                key_boq_indicators = ['sl_no', 'description', 'quantity', 'unit', 'rate', 'amount']
+                key_matches = sum(1 for pattern in matched_patterns if pattern in key_boq_indicators)
+                
+                if key_matches >= 3:  # Has at least 3 key BOQ columns
+                    confidence *= 1.5  # Significant boost
+                    logger.info(f"🎯 STRONG BOQ HEADER detected with {key_matches} key indicators")
+                
+                # Lower threshold for acceptance
+                if confidence > 0.20:  # Even lower threshold
                     headers = [str(cell).strip() for cell in row_data]
                     potential_headers.append((idx, headers, confidence))
-                    logger.info(f"Header candidate at row {idx+1}: confidence={confidence:.3f}, patterns={list(set(matched_patterns))}")
+                    logger.info(f"✅ HEADER CANDIDATE at row {idx+1}: confidence={confidence:.3f}, patterns={list(set(matched_patterns))}")
+                    logger.info(f"   📋 Headers preview: {headers[:6]}...")
+                    logger.info(f"   🔑 Key BOQ indicators: {key_matches}/6")
+                else:
+                    logger.debug(f"🔍 Row {idx+1}: Low confidence ({confidence:.3f}) - not adding as header candidate")
         
         # Smart deduplication: only one high-confidence header per region
         potential_headers = self.smart_deduplicate_headers(potential_headers)
@@ -415,7 +580,13 @@ class AdvancedBOQExtractor:
         # Sort by confidence
         potential_headers.sort(key=lambda x: x[2], reverse=True)
         
-        logger.info(f"Found {len(potential_headers)} potential header rows in {sheet_name}")
+        logger.info(f"🔍 HEADER DETECTION COMPLETE: Found {len(potential_headers)} potential header rows in '{sheet_name}'")
+        if potential_headers:
+            logger.info(f"   🥇 Top candidate: Row {potential_headers[0][0]+1} (confidence: {potential_headers[0][2]:.3f})")
+            if len(potential_headers) > 1:
+                logger.info(f"   🥈 Second candidate: Row {potential_headers[1][0]+1} (confidence: {potential_headers[1][2]:.3f})")
+        else:
+            logger.warning(f"⚠️ NO HEADERS FOUND in sheet '{sheet_name}' - this sheet may not contain BOQ data")
         
         return potential_headers
     
@@ -491,14 +662,22 @@ class AdvancedBOQExtractor:
                     cleaned_response = text_response.strip()
                     if cleaned_response.startswith('```json'):
                         cleaned_response = cleaned_response[7:]
+                    elif cleaned_response.startswith('```'):
+                        cleaned_response = cleaned_response[3:]
                     if cleaned_response.endswith('```'):
                         cleaned_response = cleaned_response[:-3]
                     cleaned_response = cleaned_response.strip()
                     
+                    # Remove any extra text before/after JSON
+                    if '{' in cleaned_response and '}' in cleaned_response:
+                        start = cleaned_response.find('{')
+                        end = cleaned_response.rfind('}') + 1
+                        cleaned_response = cleaned_response[start:end]
+                    
                     try:
                         # Try to parse as JSON
                         ai_result = json.loads(cleaned_response)
-                        logger.info(f"AI analysis successful: is_boq={ai_result.get('is_boq', 'unknown')}")
+                        logger.info(f"✅ AI JSON parsed successfully: {list(ai_result.keys())}")
                         return ai_result
                     except json.JSONDecodeError as e:
                         logger.warning(f"Failed to parse AI response as JSON: {str(e)}")
@@ -526,59 +705,252 @@ class AdvancedBOQExtractor:
             logger.error(f"Unexpected error in Gemini API call: {str(e)}")
             return None
     
-    def ai_select_best_header(self, suspected_headers: List[Tuple[int, List[str], float]], sheet_name: str) -> Optional[Tuple[int, List[str], float]]:
+    def ai_select_best_header(self, suspected_headers: List[Tuple[int, List[str], float]], sheet_name: str) -> Tuple[Optional[Tuple[int, List[str], float]], Dict]:
         """Use AI to select the best header from top 2 candidates"""
-        if not self.ai_enabled or not suspected_headers:
-            return suspected_headers[0] if suspected_headers else None
+        logger.info(f"🤖 AI HEADER SELECTION: Starting for sheet '{sheet_name}' with {len(suspected_headers)} candidates")
+        
+        if not self.ai_enabled:
+            logger.warning(f"🤖 AI DISABLED - using top candidate if available")
+            return (suspected_headers[0] if suspected_headers else None, {})
+            
+        if not suspected_headers:
+            logger.warning(f"🤖 NO CANDIDATES provided for AI selection")
+            return (None, {})
         
         # Take top 2 candidates for AI validation
         top_candidates = suspected_headers[:2]
+        logger.info(f"🤖 AI analyzing top {len(top_candidates)} header candidates:")
         
         # Prepare candidates for AI
         candidates_info = []
         for i, (row_idx, headers, conf) in enumerate(top_candidates):
-            candidates_info.append({
+            candidate_info = {
                 "option": i + 1,
                 "row": row_idx + 1,
                 "confidence": conf,
                 "headers": headers[:6]  # First 6 headers only
-            })
+            }
+            candidates_info.append(candidate_info)
+            logger.info(f"   Option {i+1}: Row {row_idx+1}, confidence={conf:.3f}, headers={headers[:4]}...")
         
-        prompt = f"""Select the best BOQ header from these {len(candidates_info)} candidates:
+        prompt = f"""You are analyzing BOQ (Bill of Quantities) headers. Select the best header and identify exact column names.
 
 WORKSHEET: {sheet_name}
 CANDIDATES:
 {json.dumps(candidates_info, indent=2)}
 
-Select the BEST header based on:
-1. Standard BOQ columns (S.No, Description, Unit, Quantity, Rate, Amount)
-2. Proper header format (not data rows or titles)
-3. Most complete BOQ structure
+TASK: Select the BEST BOQ header and identify these 3 mandatory columns:
+1. DESCRIPTION column (contains work descriptions/items)  
+2. UNIT column (contains units like cum, sqm, mt, kg, nos, etc.)
+3. QUANTITY column (contains numeric quantities/volumes - may be named QTY, QUANTITY, OVERALL QTY, TOTAL QTY, etc.)
 
-Respond ONLY with JSON:
+IMPORTANT: Column names must match EXACTLY as they appear in the candidate headers.
+
+REQUIRED OUTPUT FORMAT:
+```json
 {{
   "selected_option": 1,
   "confidence": 0.95,
-  "reasoning": "Option 1 has complete BOQ structure with standard columns"
+  "reasoning": "Option 1 has standard BOQ structure with clear columns",
+  "column_mappings": {{
+    "description_column": "EXACT_COLUMN_NAME_FROM_HEADERS",
+    "unit_column": "EXACT_COLUMN_NAME_FROM_HEADERS",
+    "quantity_column": "EXACT_COLUMN_NAME_FROM_HEADERS"
+  }}
 }}
+```
 
-If NONE are valid, set selected_option to 0.
-JSON only, no other text."""
+CRITICAL: You MUST include the "column_mappings" field with exact column names from the headers.
+If no valid BOQ header exists, set selected_option to 0.
+Return ONLY the JSON, no extra text."""
         
+        logger.info(f"🤖 Sending header selection request to AI...")
         ai_result = self.call_gemini_api(prompt)
         
         if ai_result:
             selected_option = ai_result.get('selected_option', 0)
+            ai_confidence = ai_result.get('confidence', 0.5)
+            ai_reasoning = ai_result.get('reasoning', 'No reasoning provided')
+            ai_column_mappings = ai_result.get('column_mappings', {})
+            
+            logger.info(f"🤖 AI RESPONSE FULL: {ai_result}")
+            logger.info(f"🤖 AI RESPONSE: selected_option={selected_option}, confidence={ai_confidence}")
+            logger.info(f"🤖 AI REASONING: {ai_reasoning}")
+            logger.info(f"🎯 AI COLUMN MAPPINGS: {ai_column_mappings}")
+            
             if 1 <= selected_option <= len(top_candidates):
                 selected_header = top_candidates[selected_option - 1]
-                logger.info(f"AI selected header option {selected_option} for {sheet_name}: Row {selected_header[0]+1}")
-                return selected_header
+                logger.info(f"✅ AI SELECTED HEADER: Option {selected_option} - Row {selected_header[0]+1} for sheet '{sheet_name}'")
+                logger.info(f"   🎯 AI reasoning: {ai_reasoning}")
+                
+                # Initialize ai_column_mappings if empty
+                if not ai_column_mappings:
+                    ai_column_mappings = {}
+                
+                # Check if column_mappings is incomplete
+                missing_cols = []
+                for col in ["description_column", "unit_column", "quantity_column"]:
+                    if not ai_column_mappings.get(col):
+                        missing_cols.append(col)
+                
+                if missing_cols:
+                    logger.warning(f"⚠️ Incomplete column_mappings in AI response, missing: {missing_cols}")
+                    logger.warning(f"⚠️ Current AI mappings: {ai_column_mappings}")
+                    logger.warning(f"⚠️ Completing from headers: {selected_header[1]}")
+                    
+                    complete_mappings = self.extract_columns_from_headers(selected_header[1], ai_reasoning)
+                    logger.info(f"🔧 EXTRACTION RESULT: {complete_mappings}")
+                    
+                    # Merge AI results with extracted results (AI takes priority)
+                    for col_type in ["description_column", "unit_column", "quantity_column"]:
+                        if not ai_column_mappings.get(col_type):
+                            ai_column_mappings[col_type] = complete_mappings.get(col_type)
+                            logger.info(f"🔧 COMPLETED {col_type}: '{ai_column_mappings[col_type]}'")
+                
+                logger.info(f"🎯 FINAL AI COLUMN MAPPINGS: {ai_column_mappings}")
+                
+                # Validate column mappings
+                validated_mappings = self.validate_ai_column_mappings(ai_column_mappings, selected_header[1])
+                return (selected_header, validated_mappings)
             else:
-                logger.warning(f"AI rejected all headers for {sheet_name}")
-                return None
+                logger.warning(f"❌ AI REJECTED ALL HEADERS for sheet '{sheet_name}' - selected_option: {selected_option}")
+                logger.warning(f"   🎯 AI reasoning: {ai_reasoning}")
+                return (None, {})
         else:
-            logger.warning(f"AI header selection failed for {sheet_name}, using top candidate")
-            return top_candidates[0]  # Fallback to highest confidence
+            logger.warning(f"⚠️ AI header selection FAILED for sheet '{sheet_name}' - using top candidate as fallback")
+            return (top_candidates[0], {})  # Fallback to highest confidence
+
+    def extract_columns_from_headers(self, headers: List[str], ai_reasoning: str = "") -> Dict:
+        """Smart extraction of column mappings from header list"""
+        logger.info(f"🔍 EXTRACTING COLUMNS FROM HEADERS: {headers}")
+        
+        column_mappings = {}
+        
+        # Description column patterns (most common first)
+        desc_patterns = ['description', 'item description', 'work description', 'particulars', 'activity', 'task', 'work item', 'specification', 'item']
+        for header in headers:
+            header_lower = str(header).lower()
+            if any(pattern in header_lower for pattern in desc_patterns):
+                column_mappings["description_column"] = header
+                logger.info(f"📝 Found description column: '{header}'")
+                break
+        
+        # Unit column patterns  
+        unit_patterns = ['unit', 'uom', 'u.o.m', 'units', 'unit of measurement', 'measure']
+        for header in headers:
+            header_lower = str(header).lower()
+            if any(pattern in header_lower for pattern in unit_patterns):
+                column_mappings["unit_column"] = header
+                logger.info(f"📏 Found unit column: '{header}'")
+                break
+        
+        # Quantity column patterns (exact matches first, then partial)
+        qty_exact_patterns = ['OVERALL QTY', 'TOTAL QTY', 'QTY', 'QUANTITY', 'CUMULATIVE', 'CUM QTY']
+        qty_partial_patterns = ['qty', 'quantity', 'cumulative', 'overall qty', 'total qty', 'volume', 'count', 'number', 'overall', 'cum qty', 'cum']
+        
+        # First try exact matches (case sensitive)
+        for header in headers:
+            logger.info(f"🔍 Checking header '{header}' (type: {type(header)}) against exact patterns: {qty_exact_patterns}")
+            if str(header) in qty_exact_patterns:
+                column_mappings["quantity_column"] = header
+                logger.info(f"🔢 Found quantity column (exact): '{header}'")
+                break
+            elif str(header).strip() == 'OVERALL QTY':  # Extra check with strip
+                column_mappings["quantity_column"] = header
+                logger.info(f"🔢 Found quantity column (exact with strip): '{header}'")
+                break
+        
+        # If no exact match, try case-insensitive partial matches
+        if "quantity_column" not in column_mappings:
+            for header in headers:
+                header_lower = str(header).lower()
+                if any(pattern in header_lower for pattern in qty_partial_patterns):
+                    column_mappings["quantity_column"] = header
+                    logger.info(f"🔢 Found quantity column (partial): '{header}'")
+                    break
+        
+        # If we still don't have all columns, try positional guessing based on typical BOQ structure
+        if len(column_mappings) < 3:
+            logger.warning(f"⚠️ Only found {len(column_mappings)}/3 columns, trying positional matching")
+            
+            # Typical BOQ order: S.NO, DESCRIPTION, UNIT, QTY, RATE, AMOUNT
+            if len(headers) >= 3:
+                if "description_column" not in column_mappings:
+                    # Usually the longest header or second column
+                    for i, header in enumerate(headers[1:4]):  # Check positions 1-3
+                        if len(str(header)) > 8:  # Longer headers are usually descriptions
+                            column_mappings["description_column"] = header
+                            logger.info(f"📝 Guessed description column (position): '{header}'")
+                            break
+                
+                if "unit_column" not in column_mappings:
+                    # Look for short headers after description
+                    for header in headers:
+                        if len(str(header)) <= 6 and header not in column_mappings.values():
+                            column_mappings["unit_column"] = header
+                            logger.info(f"📏 Guessed unit column (short): '{header}'")
+                            break
+                
+                if "quantity_column" not in column_mappings:
+                    # Look for remaining numeric-sounding columns
+                    for header in headers:
+                        header_lower = str(header).lower()
+                        if any(word in header_lower for word in ['qty', 'quant', 'total', 'cum', 'overall']) and header not in column_mappings.values():
+                            column_mappings["quantity_column"] = header
+                            logger.info(f"🔢 Guessed quantity column: '{header}'")
+                            break
+        
+        logger.info(f"🎯 EXTRACTED COLUMNS: {column_mappings}")
+        return column_mappings
+
+    def validate_ai_column_mappings(self, ai_mappings: Dict, headers: List[str]) -> Dict:
+        """Validate that AI-identified columns actually exist in the headers"""
+        logger.info(f"🔍 VALIDATING AI COLUMN MAPPINGS: {ai_mappings}")
+        logger.info(f"🔍 AVAILABLE HEADERS: {headers}")
+        
+        validated_mappings = {"validation_status": "FAILED", "error_message": ""}
+        
+        # Check that all required columns are provided by AI
+        required_columns = ["description_column", "unit_column", "quantity_column"]
+        missing_columns = []
+        for col in required_columns:
+            if col not in ai_mappings or not ai_mappings[col]:
+                missing_columns.append(col)
+        
+        if missing_columns:
+            validated_mappings["error_message"] = f"Missing columns: {missing_columns}. AI provided: {ai_mappings}"
+            logger.error(f"❌ VALIDATION FAILED: {validated_mappings['error_message']}")
+            return validated_mappings
+        
+        # Validate that AI-identified columns exist in actual headers
+        for col_type, col_name in ai_mappings.items():
+            if col_name not in headers:
+                # Try case-insensitive match
+                col_found = False
+                for header in headers:
+                    if str(header).lower() == str(col_name).lower():
+                        ai_mappings[col_type] = header  # Use exact case from headers
+                        col_found = True
+                        break
+                
+                if not col_found:
+                    validated_mappings["error_message"] = f"AI-identified column '{col_name}' not found in headers: {headers}"
+                    return validated_mappings
+        
+        # Success
+        validated_mappings = {
+            "validation_status": "SUCCESS",
+            "description_column": ai_mappings["description_column"],
+            "unit_column": ai_mappings["unit_column"], 
+            "quantity_column": ai_mappings["quantity_column"]
+        }
+        
+        logger.info(f"✅ AI COLUMN MAPPINGS VALIDATED:")
+        logger.info(f"   📝 Description: '{validated_mappings['description_column']}'")
+        logger.info(f"   📏 Unit: '{validated_mappings['unit_column']}'")
+        logger.info(f"   🔢 Quantity: '{validated_mappings['quantity_column']}'")
+        
+        return validated_mappings
     
     def ai_analyze_worksheet(self, df: pd.DataFrame, analysis: WorksheetAnalysis) -> Dict:
         """Simple validation of the final selected header"""
@@ -616,13 +988,40 @@ JSON only, no other text."""
         """Extract table start and end rows, continuing until the true end of data"""
         start_row = header_row + 1
         end_row = -1  # Default to -1 if no data is found below the header
+        
+        logger.info(f"📊 BOUNDARY DETECTION: Header at row {header_row}, checking data from row {start_row} to {len(df)-1}")
 
         # Scan from the bottom up to find the last row with any data
         for idx in range(len(df) - 1, start_row - 1, -1):
-            if not df.iloc[idx].isna().all():
+            row_data = df.iloc[idx]
+            # More flexible check - consider row not empty if it has any non-null, non-empty values
+            has_data = False
+            for cell in row_data:
+                cell_str = str(cell).strip()
+                if cell_str and cell_str.lower() not in ['nan', 'none', '']:
+                    has_data = True
+                    break
+            
+            if has_data:
                 end_row = idx
+                logger.info(f"📊 BOUNDARY DETECTION: Found last data row at {idx}")
                 break
-                
+        
+        if end_row == -1:
+            # If no data found, check if there are at least a few rows below header
+            max_check = min(start_row + 10, len(df) - 1)  # Check up to 10 rows below header
+            logger.warning(f"📊 BOUNDARY DETECTION: No clear data end found, checking first {max_check - start_row + 1} rows after header")
+            
+            # Look for any row with some content
+            for idx in range(start_row, max_check + 1):
+                if idx < len(df):
+                    row_data = df.iloc[idx]
+                    non_empty_cells = sum(1 for cell in row_data if str(cell).strip() and str(cell).strip().lower() not in ['nan', 'none', ''])
+                    if non_empty_cells >= 2:  # At least 2 non-empty cells
+                        end_row = max(idx + 5, max_check)  # Give some buffer
+                        logger.info(f"📊 BOUNDARY DETECTION: Using fallback end row {end_row} based on content detection")
+                        break
+                        
         return start_row, end_row
 
     def extract_boq_table(self, file_path: str, ws_analysis: WorksheetAnalysis, region: Dict) -> Optional[BOQTable]:
@@ -693,7 +1092,7 @@ JSON only, no other text."""
     def process_excel_file(self, file_path: str) -> FileAnalysis:
         """Process a complete Excel file and return analysis results"""
         start_time = time.time()
-        logger.info(f"Processing file: {os.path.basename(file_path)}")
+        logger.info(f"🚀 STARTING FILE PROCESSING: {os.path.basename(file_path)}")
         
         # Validate file exists and is readable
         if not os.path.exists(file_path):
@@ -701,20 +1100,25 @@ JSON only, no other text."""
         
         # Get file info
         file_size = os.path.getsize(file_path)
+        logger.info(f"📄 File size: {file_size:,} bytes ({file_size/(1024*1024):.1f} MB)")
         
         # Load workbook with error handling
         try:
+            logger.info(f"📖 Loading Excel workbook...")
             wb = openpyxl.load_workbook(file_path, data_only=False)
+            logger.info(f"✅ Workbook loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to load workbook: {str(e)}")
+            logger.error(f"❌ Failed to load workbook: {str(e)}")
             raise Exception(f"Cannot open Excel file. File may be corrupted or password protected: {str(e)}")
         
         # Analyze each worksheet
         worksheet_analyses = []
         boq_tables = []
+        logger.info(f"📋 Found {len(wb.sheetnames)} worksheets: {wb.sheetnames}")
         
-        for sheet_name in wb.sheetnames:
+        for i, sheet_name in enumerate(wb.sheetnames, 1):
             try:
+                logger.info(f"📋 PROCESSING WORKSHEET {i}/{len(wb.sheetnames)}: '{sheet_name}'")
                 ws = wb[sheet_name]
                 ws_analysis = self.analyze_worksheet_structure(ws, sheet_name, file_path)
                 worksheet_analyses.append(ws_analysis)
@@ -723,28 +1127,45 @@ JSON only, no other text."""
                 if ws_analysis.boq_regions:
                     region = ws_analysis.boq_regions[0]  # Only 1 region per worksheet
                     if region['data_rows'] > 0:
+                        logger.info(f"📊 Extracting BOQ table from region with {region['data_rows']} data rows")
                         boq_table = self.extract_boq_table(file_path, ws_analysis, region)
                         if boq_table:
                             boq_tables.append(boq_table)
-                            logger.info(f"Created 1 BOQ table for {sheet_name}")
+                            logger.info(f"✅ Successfully created BOQ table for '{sheet_name}' ({len(boq_table.data)} rows)")
+                        else:
+                            logger.warning(f"⚠️ Failed to extract BOQ table from '{sheet_name}'")
                     else:
-                        logger.warning(f"Skipping BOQ region in {sheet_name} as it contains no data rows.")
+                        logger.warning(f"⚠️ Skipping BOQ region in '{sheet_name}' - contains no data rows")
+                else:
+                    logger.info(f"📊 No BOQ regions found in worksheet '{sheet_name}'")
                     
             except Exception as e:
-                logger.error(f"Error processing worksheet {sheet_name}: {str(e)}")
+                logger.error(f"❌ Error processing worksheet '{sheet_name}': {str(e)}")
                 continue
         
         processing_time = time.time() - start_time
         
         # Create summary
+        worksheets_with_boq = len([ws for ws in worksheet_analyses if ws.boq_regions])
+        high_confidence_tables = len([bt for bt in boq_tables if bt.confidence_score > 0.7])
+        ai_validated_tables = len([bt for bt in boq_tables if bt.ai_validated]) if self.ai_enabled else 0
+        
         extraction_summary = {
             'total_worksheets': len(worksheet_analyses),
-            'worksheets_with_boq': len([ws for ws in worksheet_analyses if ws.boq_regions]),
+            'worksheets_with_boq': worksheets_with_boq,
             'total_boq_tables': len(boq_tables),
-            'high_confidence_tables': len([bt for bt in boq_tables if bt.confidence_score > 0.7]),
-            'ai_validated_tables': len([bt for bt in boq_tables if bt.ai_validated]) if self.ai_enabled else 0,
+            'high_confidence_tables': high_confidence_tables,
+            'ai_validated_tables': ai_validated_tables,
             'processing_time_seconds': processing_time
         }
+        
+        logger.info(f"🎉 FILE PROCESSING COMPLETE!")
+        logger.info(f"   📊 Total worksheets: {len(worksheet_analyses)}")
+        logger.info(f"   ✅ Worksheets with BOQ: {worksheets_with_boq}")
+        logger.info(f"   📋 BOQ tables created: {len(boq_tables)}")
+        logger.info(f"   🎯 High confidence tables: {high_confidence_tables}")
+        logger.info(f"   🤖 AI validated tables: {ai_validated_tables}")
+        logger.info(f"   ⏱️ Processing time: {processing_time:.2f} seconds")
         
         file_analysis = FileAnalysis(
             filename=os.path.basename(file_path),

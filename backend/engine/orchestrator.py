@@ -35,6 +35,9 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
     """
     logger.info(f"🚀 ORCHESTRATOR: Starting 3-stage extraction for {len(selected_sheets)} sheets from {file_path}")
     
+    # Import preprocessor for column identification
+    from .pre_processor import AdvancedBOQExtractor
+    
     # Initialize all processing stages
     stage1 = Stage1EnhancedHeaderDetector()
     stage2 = Stage2EnhancedHeaderVerifier()  # Uses centralized Gemini client
@@ -45,6 +48,9 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
     try:
         xls = pd.ExcelFile(file_path)
         
+        # Initialize preprocessor for column detection
+        preprocessor = AdvancedBOQExtractor(gemini_api_key=api_key)
+        
         for sheet_name in selected_sheets:
             logger.info(f"🔄 ORCHESTRATOR: Processing sheet: {sheet_name}")
             
@@ -53,24 +59,68 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
                 all_results[sheet_name] = {"error": f"Sheet {sheet_name} not found in file"}
                 continue
                 
-            df = pd.read_excel(xls, sheet_name=sheet_name)
+            # GET COLUMN MAPPINGS AND HEADER ROW: From preprocessor analysis first
+            logger.warning(f"🔍 RETRIEVING COLUMN MAPPINGS: Getting AI-identified columns for '{sheet_name}'")
+            
+            # Run analysis to get column mappings and header row info
+            ws = None
+            analysis = None
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(file_path, data_only=True)
+                if sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    analysis = preprocessor.analyze_worksheet_structure(ws, sheet_name, file_path)
+            except Exception as e:
+                logger.error(f"Error loading worksheet for analysis: {e}")
+            
+            # Read DataFrame using the correct header row
+            header_row = 0  # Default
+            if analysis and analysis.boq_regions:
+                header_row = analysis.boq_regions[0]['header_row']
+                logger.info(f"📊 Using AI-identified header row: {header_row}")
+            
+            try:
+                df = pd.read_excel(xls, sheet_name=sheet_name, header=header_row)
+                logger.info(f"📊 DataFrame columns after reading with header row {header_row}: {list(df.columns)}")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to read with header row {header_row}, using default: {e}")
+                df = pd.read_excel(xls, sheet_name=sheet_name)
+            
             if df.empty:
                 logger.warning(f"❌ Sheet {sheet_name} is empty")
                 all_results[sheet_name] = {"error": f"Sheet {sheet_name} is empty"}
                 continue
 
-            # STAGE 1: Rule-based header detection and chunking
-            logger.info(f"📊 STAGE 1: Starting rule-based header detection for {sheet_name}")
-            desc_col = stage1.find_description_column(df)
-            if not desc_col:
-                logger.error(f"❌ STAGE 1: No description column found in {sheet_name}")
-                all_results[sheet_name] = {"error": f"No description column found in {sheet_name}"}
+            # Get column mappings
+            if analysis:
+                column_mappings = analysis.column_mappings
+            else:
+                # Fallback to manual detection on the properly read DataFrame
+                column_mappings = preprocessor.identify_mandatory_columns(df, sheet_name)
+            
+            if column_mappings.get("validation_status") != "SUCCESS":
+                error_msg = column_mappings.get("error_message", "Failed to identify mandatory columns")
+                logger.error(f"❌ COLUMN MAPPINGS FAILED for '{sheet_name}': {error_msg}")
+                all_results[sheet_name] = {"error": f"Missing required BOQ columns: {error_msg}"}
                 continue
             
-            unit_col = stage1.find_unit_column(df)
-            logger.info(f"✅ STAGE 1: Found description column: {desc_col}, unit column: {unit_col or 'None'}")
+            # Extract column names from mappings
+            desc_col = column_mappings["description_column"]
+            unit_col = column_mappings["unit_column"] 
+            quantity_col = column_mappings["quantity_column"]
             
-            chunks, header_registry = stage1.create_sequential_chunks_enhanced(df, desc_col, unit_col)
+            logger.warning(f"✅ AI-IDENTIFIED COLUMNS FOUND for '{sheet_name}':")
+            logger.warning(f"   📝 Description: '{desc_col}'")
+            logger.warning(f"   📏 Unit: '{unit_col}'")
+            logger.warning(f"   🔢 Quantity: '{quantity_col}'")
+
+            # STAGE 1: Rule-based header detection and chunking
+            logger.warning(f"🚀 STAGE 1: Starting rule-based header detection for '{sheet_name}'")
+            logger.warning(f"📊 STAGE 1: Processing {len(df)} rows using identified columns")
+            
+            logger.warning(f"📊 STAGE 1: Creating chunks and detecting headers...")
+            chunks, header_registry = stage1.create_sequential_chunks_enhanced(df, desc_col, unit_col, quantity_col)
             
             if not chunks:
                 logger.warning(f"❌ STAGE 1: No chunks created for {sheet_name}")
@@ -82,23 +132,77 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
                 all_results[sheet_name] = {"error": f"No headers found in {sheet_name}"}
                 continue
             
-            logger.info(f"✅ STAGE 1 COMPLETE: Created {len(chunks)} chunks and registered {len(header_registry)} headers for {sheet_name}")
+            logger.warning(f"✅ STAGE 1 COMPLETE: Created {len(chunks)} chunks and registered {len(header_registry)} headers for '{sheet_name}'")
             
             # STAGE 2: AI-powered header verification
-            logger.info(f"🤖 STAGE 2: Starting AI header verification for {sheet_name} - verifying {len(header_registry)} headers")
+            logger.warning(f"🤖 STAGE 2: Starting AI header verification for '{sheet_name}'")
+            logger.warning(f"🤖 STAGE 2: Processing {len(header_registry)} headers for AI verification...")
             
-            verified_headers = await stage2.verify_headers(header_registry)
+            # DEBUG: Check what type header_registry is
+            logger.info(f"🔍 DEBUG: header_registry type = {type(header_registry)}, count = {len(header_registry)}")
+            
+            # Convert dictionary to list of values for Stage 2 processing
+            if isinstance(header_registry, dict):
+                header_list = list(header_registry.values())
+                logger.info(f"🔍 DEBUG: Converted dict to list with {len(header_list)} items")
+            else:
+                header_list = header_registry
+                logger.info(f"🔍 DEBUG: Using header_registry directly as list")
+            
+            # DEBUG: Check first item in header_list
+            if header_list:
+                first_item = header_list[0]
+                logger.info(f"🔍 DEBUG: First header item type = {type(first_item)}")
+            
+            for i, header in enumerate(header_list, 1):
+                try:
+                    if isinstance(header, dict):
+                        header_text = header.get('header_text', 'Unknown')
+                        confidence = header.get('confidence', 0.0)
+                    else:
+                        header_text = getattr(header, 'header_text', f'Unknown_Object_{type(header)}')
+                        confidence = getattr(header, 'confidence', 0.0)
+                    
+                    logger.info(f"🤖 STAGE 2: Header {i}/{len(header_list)}: '{header_text[:50]}...' (confidence: {confidence:.3f})")
+                except Exception as e:
+                    logger.error(f"❌ Error processing header {i}: {e}, header type: {type(header)}, content: {header}")
+            
+            verified_headers = await stage2.verify_headers(header_list)
             
             if not verified_headers:
-                logger.warning(f"❌ STAGE 2: No verified headers for {sheet_name}")
+                logger.warning(f"❌ STAGE 2: No verified headers for '{sheet_name}' - all headers rejected by AI")
                 all_results[sheet_name] = {"error": f"No verified headers found in {sheet_name}"}
                 continue
             
-            logger.info(f"✅ STAGE 2 COMPLETE: Verified {len(verified_headers)} headers for {sheet_name}")
+            logger.warning(f"✅ STAGE 2 COMPLETE: Verified {len(verified_headers)}/{len(header_registry)} headers for '{sheet_name}'")
+            
+            # Log details of verified headers
+            for verified in verified_headers:
+                if isinstance(verified, dict):
+                    header_text = verified.get('header_text', 'Unknown')[:40]
+                    category = verified.get('final_category', 'Unknown')
+                    material = verified.get('final_material', 'Unknown')
+                else:
+                    header_text = getattr(verified, 'header_text', 'Unknown')[:40]
+                    category = getattr(verified, 'final_category', 'Unknown')
+                    material = getattr(verified, 'final_material', 'Unknown')
+                
+                logger.info(f"   ✅ Verified: '{header_text}...' -> Category: {category}, Material: {material}")
             
             # FIXED: Debug chunk ID mapping between Stage 2 and Stage 3
             logger.info(f"🔍 STAGE 2->3 MAPPING DEBUG:")
-            verified_header_map = {vh.chunk_id: vh for vh in verified_headers}
+            
+            # Handle both dict and object format for verified headers
+            verified_header_map = {}
+            for vh in verified_headers:
+                if isinstance(vh, dict):
+                    chunk_id = vh.get('chunk_id')
+                else:
+                    chunk_id = getattr(vh, 'chunk_id', None)
+                
+                if chunk_id is not None:
+                    verified_header_map[chunk_id] = vh
+            
             chunk_ids_from_stage1 = [chunk.chunk_id for chunk in chunks]
             chunk_ids_from_stage2 = list(verified_header_map.keys())
             
@@ -110,14 +214,28 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
                 logger.warning(f"⚠️ Missing header context for chunks: {missing_mappings}")
             
             # STAGE 3: AI context inheritance for line items
-            logger.info(f"🧠 STAGE 3: Starting AI context inheritance for {sheet_name} - processing {len(chunks)} chunks")
+            logger.warning(f"🧠 STAGE 3: Starting AI context inheritance for '{sheet_name}'")
+            logger.warning(f"🧠 STAGE 3: Processing {len(chunks)} chunks with line item extraction")
+            
             tasks = []
             processed_chunks = 0
+            total_items = 0
             
-            for chunk in chunks:
+            for i, chunk in enumerate(chunks, 1):
                 header_context = verified_header_map.get(chunk.chunk_id)
                 if header_context:
-                    logger.info(f"  - Creating task for chunk {chunk.chunk_id} with {len(chunk.items)} items")
+                    chunk_items_count = len(chunk.items)
+                    total_items += chunk_items_count
+                    logger.info(f"🧠 STAGE 3: Chunk {i}/{len(chunks)} - ID: {chunk.chunk_id}, Items: {chunk_items_count}")
+                    
+                    # Handle both dict and object format for header context
+                    if isinstance(header_context, dict):
+                        context_text = header_context.get('header_text', 'Unknown')[:40]
+                    else:
+                        context_text = getattr(header_context, 'header_text', 'Unknown')[:40]
+                    
+                    logger.info(f"   📋 Header context: '{context_text}...'")
+                    
                     tasks.append(stage3.extract_chunk_details_enhanced(
                         chunk_info={'chunk_id': chunk.chunk_id}, 
                         verified_header=header_context, 
@@ -125,16 +243,17 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
                     ))
                     processed_chunks += 1
                 else:
-                    logger.warning(f"⚠️ No header context found for chunk {chunk.chunk_id} - skipping")
+                    logger.warning(f"⚠️ STAGE 3: Chunk {i}/{len(chunks)} - ID: {chunk.chunk_id} - NO HEADER CONTEXT, skipping")
             
             if not tasks:
-                logger.warning(f"❌ STAGE 3: No tasks created for {sheet_name}")
+                logger.warning(f"❌ STAGE 3: No tasks created for '{sheet_name}' - no chunks with valid header context")
                 all_results[sheet_name] = {"error": f"No processable tasks found in {sheet_name}"}
                 continue
             
-            logger.info(f"🚀 STAGE 3: Executing {len(tasks)} parallel tasks for {processed_chunks} chunks")
+            logger.info(f"🚀 STAGE 3: Executing {len(tasks)} parallel AI tasks for {processed_chunks} chunks ({total_items} total items)")
             
             # Execute all Stage 3 tasks in parallel
+            logger.info(f"🧠 STAGE 3: Starting parallel AI processing...")
             line_item_results_list = await asyncio.gather(*tasks, return_exceptions=True)
             
             # Flatten results and handle exceptions
@@ -142,15 +261,21 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
             successful_tasks = 0
             failed_tasks = 0
             
+            logger.info(f"🧠 STAGE 3: Processing {len(line_item_results_list)} task results...")
+            
             for i, result in enumerate(line_item_results_list):
                 if isinstance(result, Exception):
-                    logger.error(f"❌ STAGE 3: Task {i+1} failed: {result}")
+                    logger.error(f"❌ STAGE 3: Task {i+1}/{len(tasks)} FAILED: {result}")
                     failed_tasks += 1
                     continue
+                
+                task_items = len(result) if result else 0
                 processed_items.extend(result)
                 successful_tasks += 1
+                logger.info(f"✅ STAGE 3: Task {i+1}/{len(tasks)} SUCCESS - extracted {task_items} items")
             
-            logger.info(f"✅ STAGE 3 COMPLETE: {successful_tasks}/{len(tasks)} tasks successful, {failed_tasks} failed")
+            logger.warning(f"✅ STAGE 3 COMPLETE: {successful_tasks}/{len(tasks)} tasks successful, {failed_tasks} failed")
+            logger.warning(f"📊 Total items extracted: {len(processed_items)}")
             
             if not processed_items:
                 logger.warning(f"❌ STAGE 3: No items processed for {sheet_name}")
@@ -189,7 +314,9 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
                     "headers_registered": len(header_registry),
                     "description_column": desc_col,
                     "unit_column": unit_col,
-                    "stage3_success_rate": f"{successful_tasks}/{len(tasks)}"
+                    "quantity_column": quantity_col,
+                    "stage3_success_rate": f"{successful_tasks}/{len(tasks)}",
+                    "column_mappings": column_mappings
                 }
             }
             

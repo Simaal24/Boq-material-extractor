@@ -135,12 +135,14 @@ class Stage1EnhancedHeaderDetector:
         """ENHANCED 4-tier header detection with complex patterns"""
         text = (description or "").strip()
         if not text or len(text) < 30:
+            logger.debug(f"📝 STAGE 1: '{text[:30]}...' - TOO SHORT (< 30 chars)")
             return False
 
         text_lower = text.lower()
         
         # Rejection patterns
         if any(re.search(pattern, text_lower) for pattern in REJECT_PATTERNS):
+            logger.debug(f"📝 STAGE 1: '{text[:50]}...' - REJECTED (matches rejection pattern)")
             return False
 
         analysis = self.analyze_boq_structure(text)
@@ -180,7 +182,9 @@ class Stage1EnhancedHeaderDetector:
                 match_type = "Structural"
             else:
                 match_type = "Short"
-            logger.debug(f"🏆 HEADER DETECTED ({match_type}): {analysis.get('primary_verb')} + {analysis.get('secondary_action')}")
+            logger.warning(f"✅ STAGE 1 HEADER DETECTED ({match_type}): '{text[:50]}...' - {analysis.get('primary_verb')} + {analysis.get('secondary_action')}")
+        else:
+            logger.debug(f"📝 STAGE 1: '{text[:50]}...' - NOT A HEADER")
         
         return is_header
 
@@ -451,47 +455,9 @@ class Stage1EnhancedHeaderDetector:
         
         return has_note_pattern
 
-    def find_description_column(self, df: pd.DataFrame) -> Optional[str]:
-        """Find description column"""
-        possible_cols = ['description', 'item description', 'work description', 'particulars']
-        
-        for col in df.columns:
-            if any(desc_name in str(col).lower() for desc_name in possible_cols):
-                return col
-        
-        text_columns = [col for col in df.columns if df[col].dtype == 'object']
-        if text_columns:
-            text_lengths = {col: df[col].astype(str).str.len().mean() for col in text_columns}
-            return max(text_lengths, key=text_lengths.get)
-        
-        return None
+    # NOTE: Column detection methods removed - now handled by preprocessor mandate
 
-    def find_unit_column(self, df: pd.DataFrame) -> Optional[str]:
-        """Find unit column in DataFrame"""
-        possible_unit_cols = ['unit', 'uom', 'units', 'unit of measurement', 'u.o.m', 'measure']
-        
-        for col in df.columns:
-            col_lower = str(col).lower().strip()
-            if any(unit_name in col_lower for unit_name in possible_unit_cols):
-                logger.info(f"🎯 UNIT COLUMN FOUND: {col}")
-                return col
-        
-        # Check for very short text columns that might be units
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                avg_length = df[col].astype(str).str.len().mean()
-                unique_values = df[col].nunique()
-                if avg_length < 10 and unique_values < len(df) * 0.1:
-                    sample_values = df[col].dropna().astype(str).str.lower().unique()[:5]
-                    unit_indicators = ['cum', 'sqm', 'mt', 'kg', 'nos', 'rmt', 'ltr', 'm', 'each']
-                    if any(any(indicator in val for indicator in unit_indicators) for val in sample_values):
-                        logger.info(f"🎯 UNIT COLUMN DETECTED (by pattern): {col}")
-                        return col
-        
-        logger.warning("⚠️ No unit column found - proceeding with description-only analysis")
-        return None
-
-    def create_sequential_chunks_enhanced(self, df: pd.DataFrame, description_col: str, unit_col: Optional[str] = None) -> Tuple[List[ProcessingChunk], Dict[int, Dict]]:
+    def create_sequential_chunks_enhanced(self, df: pd.DataFrame, description_col: str, unit_col: Optional[str] = None, quantity_col: Optional[str] = None) -> Tuple[List[ProcessingChunk], Dict[int, Dict]]:
         """ENHANCED: Create chunks with specification extraction from headers"""
         chunks = []
         header_registry = {}
@@ -506,12 +472,26 @@ class Stage1EnhancedHeaderDetector:
         else:
             logger.info("⚠️ No unit column found")
         
+        if quantity_col:
+            logger.info(f"🎯 Quantity column detected: {quantity_col} (will be preserved)")
+        else:
+            logger.info("⚠️ No quantity column found")
+        
         for idx, row in df.iterrows():
             description = str(row[description_col]).strip()
             unit = str(row[unit_col]).strip() if unit_col and not pd.isna(row[unit_col]) else ""
+            quantity = ""
+            if quantity_col and not pd.isna(row[quantity_col]):
+                try:
+                    quantity = str(row[quantity_col]).strip()
+                except:
+                    quantity = ""
             
             if self.is_empty_or_trivial(description):
+                logger.debug(f"📝 STAGE 1: Row {idx} - EMPTY/TRIVIAL: '{description[:30]}...'")
                 continue
+            
+            logger.debug(f"📝 STAGE 1: Row {idx} - Processing: '{description[:50]}...'")
             
             if self.is_main_header(description):
                 # Save previous chunk ONLY if it has items
@@ -555,8 +535,8 @@ class Stage1EnhancedHeaderDetector:
                 if current_specifications:
                     logger.info(f"🔍 Header specifications: {current_specifications}")
             
-            # Store (row_idx, description, unit) triplets
-            current_chunk_items.append((idx, description, unit))
+            # Store (row_idx, description, unit, quantity) quadruplets
+            current_chunk_items.append((idx, description, unit, quantity))
             
             # Smart chunking WITH context preservation
             if len(current_chunk_items) >= 20:
@@ -582,11 +562,13 @@ class Stage1EnhancedHeaderDetector:
                 header_specifications=current_specifications.copy()
             ))
         
-        logger.info(f"✅ Stage 1 Complete: {len(chunks)} chunks created with activity priority, {len(header_registry)} headers registered")
+        logger.warning(f"✅ STAGE 1 Complete: {len(chunks)} chunks created with activity priority, {len(header_registry)} headers registered")
+        logger.info(f"🔍 DEBUG STAGE 1: header_registry type = {type(header_registry)}, count = {len(header_registry)}")
+        
         return chunks, header_registry
 
 
-def run_stage1_detection(df: pd.DataFrame, description_col: str, unit_col: Optional[str] = None) -> Tuple[List[ProcessingChunk], Dict[int, Dict]]:
+def run_stage1_detection(df: pd.DataFrame, description_col: str, unit_col: Optional[str] = None, quantity_col: Optional[str] = None) -> Tuple[List[ProcessingChunk], Dict[int, Dict]]:
     """
     Convenience function to run Stage 1 detection on a DataFrame.
     
@@ -594,35 +576,13 @@ def run_stage1_detection(df: pd.DataFrame, description_col: str, unit_col: Optio
         df: The DataFrame containing BOQ data
         description_col: Name of the column containing descriptions
         unit_col: Name of the column containing units (optional)
+        quantity_col: Name of the column containing quantities (optional)
         
     Returns:
         Tuple of (chunks, header_registry) from Stage 1 processing
     """
     detector = Stage1EnhancedHeaderDetector()
-    return detector.create_sequential_chunks_enhanced(df, description_col, unit_col)
+    return detector.create_sequential_chunks_enhanced(df, description_col, unit_col, quantity_col)
 
-def find_description_column(df: pd.DataFrame) -> Optional[str]:
-    """
-    Convenience function to find the description column in a DataFrame.
-    
-    Args:
-        df: The DataFrame to analyze
-        
-    Returns:
-        Name of the description column or None if not found
-    """
-    detector = Stage1EnhancedHeaderDetector()
-    return detector.find_description_column(df)
-
-def find_unit_column(df: pd.DataFrame) -> Optional[str]:
-    """
-    Convenience function to find the unit column in a DataFrame.
-    
-    Args:
-        df: The DataFrame to analyze
-        
-    Returns:
-        Name of the unit column or None if not found
-    """
-    detector = Stage1EnhancedHeaderDetector()
-    return detector.find_unit_column(df)
+# NOTE: Column detection convenience functions removed
+# Use preprocessor.identify_mandatory_columns() instead
