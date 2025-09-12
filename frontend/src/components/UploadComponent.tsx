@@ -51,14 +51,14 @@ const UploadComponent: React.FC<UploadComponentProps> = ({ onUploadSuccess }) =>
   };
 
   return (
-    <div className="text-center max-w-2xl mx-auto">
-      <h2 className="text-3xl font-bold text-gray-800 mb-2">Upload Your Bill of Quantities</h2>
-      <p className="text-gray-500 mb-8">Select your Excel file to begin.</p>
+    <div className="text-center max-w-xl mx-auto">
+      <h2 className="text-2xl font-bold text-gray-800 mb-1">Upload Your Bill of Quantities</h2>
+      <p className="text-gray-500 mb-4">Select your Excel file to begin.</p>
       
       <label htmlFor="file-upload" className="cursor-pointer">
-        <div className="p-12 border-2 border-dashed rounded-xl border-gray-300 hover:border-teal-400 transition-colors">
+        <div className="p-8 border-2 border-dashed rounded-lg border-gray-300 hover:border-teal-400 transition-colors">
           <div className="flex flex-col items-center text-gray-600">
-            <svg className="w-16 h-16 mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-12 h-12 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
             </svg>
             <span className="bg-white rounded-md font-medium text-teal-600 hover:text-teal-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-teal-500">
@@ -72,18 +72,33 @@ const UploadComponent: React.FC<UploadComponentProps> = ({ onUploadSuccess }) =>
               onChange={handleFileChange} 
               accept=".xls,.xlsx,.xlsm" 
             />
-            {file && <p className="font-semibold text-teal-700 mt-4">{file.name}</p>}
-            <p className="text-sm text-gray-400 mt-2">XLS, XLSX files supported</p>
+            {file && <p className="font-semibold text-teal-700 mt-2">{file.name}</p>}
+            <p className="text-xs text-gray-400 mt-1">XLS, XLSX files supported</p>
           </div>
         </div>
       </label>
       
-      {error && <p className="text-red-500 mt-4">{error}</p>}
+      <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg text-left text-xs text-yellow-800" role="alert">
+        <div className="flex items-start">
+          <svg className="w-4 h-4 mr-2 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd"></path>
+          </svg>
+          <div>
+            <span className="font-semibold">For successful extraction, please ensure your file:</span>
+            <ul className="list-disc list-inside mt-1 space-y-0.5">
+              <li>Includes columns for <strong>Description</strong>, <strong>Unit</strong>, and <strong>Quantity</strong>.</li>
+              <li>Clearly marks any total rows to avoid double-counting.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      
+      {error && <p className="text-red-500 mt-3 text-sm">{error}</p>}
       
       <button 
         onClick={handleAnalyzeClick} 
         disabled={!file || loading} 
-        className="mt-8 w-full sm:w-auto bg-teal-500 text-white font-bold py-3 px-12 rounded-lg hover:bg-teal-600 disabled:bg-gray-400 transition-all shadow-md"
+        className="mt-4 w-full sm:w-auto bg-teal-500 text-white font-bold py-2.5 px-10 rounded-lg hover:bg-teal-600 disabled:bg-gray-400 transition-all shadow-md"
       >
         {loading ? 'Analyzing...' : 'Analyze'}
       </button>

@@ -1,4 +1,5 @@
 import React from 'react';
+import * as XLSX from 'xlsx';
 
 interface SummaryItem {
   Category: string;
@@ -18,13 +19,60 @@ interface SummaryComponentProps {
     input_rows?: number;
   };
   onReset: () => void;
+  onBack: () => void;
 }
 
-const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onReset }) => {
+const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onReset, onBack }) => {
   // Handle case where summaryData might not have the expected structure
   const summaryItems = summaryData?.summary || summaryData?.summary_data || [];
   const totalQuantity = summaryData?.total_quantity || 0;
   const summaryGroups = summaryData?.summary_groups || summaryItems.length;
+
+  const downloadSummaryExcel = () => {
+    const exportData = summaryItems.map(item => ({
+      Category: item.Category,
+      Material: item.Material,
+      Grade: item.Grade,
+      Unit: item.Unit,
+      Quantity: typeof item.Quantity === 'number' ? item.Quantity.toFixed(2) : item.Quantity || 0
+    }));
+
+    // Add a totals row
+    const totalsRow = {
+      Category: 'TOTAL',
+      Material: '',
+      Grade: '',
+      Unit: '',
+      Quantity: totalQuantity.toFixed(2)
+    };
+    exportData.push(totalsRow);
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Material Summary');
+    
+    // Auto-size columns
+    const colWidths = Object.keys(exportData[0] || {}).map(key => ({
+      wch: Math.max(key.length, ...exportData.map(row => String(row[key] || '').length))
+    }));
+    ws['!cols'] = colWidths;
+    
+    // Style the total row
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    const totalRowIndex = range.e.r;
+    for (let col = range.s.c; col <= range.e.c; col++) {
+      const cellAddress = XLSX.utils.encode_cell({ r: totalRowIndex, c: col });
+      if (ws[cellAddress]) {
+        ws[cellAddress].s = {
+          font: { bold: true },
+          fill: { fgColor: { rgb: "E0E0E0" } }
+        };
+      }
+    }
+    
+    const fileName = `material_summary_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  };
 
   return (
     <div className="text-center max-w-6xl mx-auto">
@@ -78,13 +126,22 @@ const SummaryComponent: React.FC<SummaryComponentProps> = ({ summaryData, onRese
 
       <div className="mt-8 flex justify-center space-x-4">
         <button 
+          onClick={onBack}
+          className="bg-gray-200 text-gray-700 font-bold py-3 px-8 rounded-lg hover:bg-gray-300 transition-all shadow-md"
+        >
+          Back
+        </button>
+        <button 
+          onClick={downloadSummaryExcel}
+          className="bg-blue-500 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-600 transition-all shadow-md"
+        >
+          Download Excel
+        </button>
+        <button 
           onClick={onReset} 
           className="bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-8 rounded-lg transition-all shadow-md"
         >
           Start Over
-        </button>
-        <button className="bg-gray-200 text-gray-700 font-bold py-3 px-8 rounded-lg hover:bg-gray-300 transition-all">
-          Download Excel
         </button>
       </div>
     </div>

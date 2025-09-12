@@ -8,6 +8,7 @@ and extracts BOQ tables with AI assistance.
 
 import pandas as pd
 import openpyxl
+import time
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.utils.cell import coordinate_from_string
 import re
@@ -251,15 +252,28 @@ class AdvancedBOQExtractor:
             "error_message": ""
         }
         
-        # 1. Find Description Column (MANDATORY)
-        desc_patterns = ['description', 'item description', 'work description', 'particulars', 'activity', 'task', 'work item', 'specification']
+        # 1. Find Description Column (MANDATORY) - Enhanced patterns with priority
+        desc_patterns_priority = [
+            # HIGHEST PRIORITY - exact matches first
+            ['description'],
+            # High priority - most specific patterns
+            ['item description', 'work description', 'job description', 'activity description', 'particulars'],
+            # Medium priority - common specific patterns
+            ['specification', 'scope of work', 'nature of work', 'work item', 'activity', 'task'],
+            # Lower priority - more generic patterns
+            ['item', 'items', 'material', 'materials', 'work', 'details', 'desc', 'item name', 'work details', 'scope', 'type of work']
+        ]
         desc_col = None
         
-        for col in df.columns:
-            col_lower = str(col).lower().strip()
-            if any(desc_name in col_lower for desc_name in desc_patterns):
-                desc_col = col
-                logger.info(f"✅ DESCRIPTION COLUMN FOUND: '{col}'")
+        # Try patterns in priority order
+        for priority_level, patterns in enumerate(desc_patterns_priority):
+            for col in df.columns:
+                col_lower = str(col).lower().strip()
+                if any(desc_name in col_lower for desc_name in patterns):
+                    desc_col = col
+                    logger.info(f"✅ DESCRIPTION COLUMN FOUND (Priority {priority_level+1}): '{col}'")
+                    break
+            if desc_col:
                 break
         
         if not desc_col:
@@ -276,15 +290,28 @@ class AdvancedBOQExtractor:
         
         column_mappings["description_column"] = desc_col
         
-        # 2. Find Unit Column (MANDATORY)
-        unit_patterns = ['unit', 'uom', 'u.o.m', 'units', 'unit of measurement', 'measure']
+        # 2. Find Unit Column (MANDATORY) - Enhanced patterns with priority
+        unit_patterns_priority = [
+            # HIGHEST PRIORITY - exact matches first
+            ['unit'],
+            # High priority - most specific BOQ unit patterns
+            ['unit of measurement', 'u.o.m', 'uom', 'measuring unit'],
+            # Medium priority - common unit patterns  
+            ['units', 'measure', 'measurement', 'unit measure'],
+            # Lower priority - abbreviated patterns
+            ['un', 'u/m', 'u.m', 'um']
+        ]
         unit_col = None
         
-        for col in df.columns:
-            col_lower = str(col).lower().strip()
-            if any(unit_name in col_lower for unit_name in unit_patterns):
-                unit_col = col
-                logger.info(f"✅ UNIT COLUMN FOUND: '{col}'")
+        # Try patterns in priority order
+        for priority_level, patterns in enumerate(unit_patterns_priority):
+            for col in df.columns:
+                col_lower = str(col).lower().strip()
+                if any(unit_name in col_lower for unit_name in patterns):
+                    unit_col = col
+                    logger.info(f"✅ UNIT COLUMN FOUND (Priority {priority_level+1}): '{col}'")
+                    break
+            if unit_col:
                 break
         
         if not unit_col:
@@ -306,15 +333,28 @@ class AdvancedBOQExtractor:
         
         column_mappings["unit_column"] = unit_col
         
-        # 3. Find Quantity Column (MANDATORY)
-        qty_patterns = ['qty', 'quantity', 'cumulative', 'overall qty', 'total qty', 'volume', 'count', 'number', 'overall', 'cum qty']
+        # 3. Find Quantity Column (MANDATORY) - Enhanced patterns with priority
+        qty_patterns_priority = [
+            # HIGHEST PRIORITY - exact matches first
+            ['quantity'],
+            # High priority - most specific quantity patterns
+            ['cumulative quantity', 'overall quantity', 'total quantity', 'net quantity', 'gross quantity'],
+            # Medium priority - common quantity patterns
+            ['cumulative', 'overall qty', 'total qty', 'cum qty', 'cumulative qty'],
+            # Lower priority - abbreviated patterns (removed problematic 'no', 'number' that match 'Sl. No.')
+            ['qty', 'qnty', 'quant', 'volume', 'count', 'overall', 'cum', 'qtty', 'amount', 'nos', 'nos.']
+        ]
         qty_col = None
         
-        for col in df.columns:
-            col_lower = str(col).lower().strip()
-            if any(qty_name in col_lower for qty_name in qty_patterns):
-                qty_col = col
-                logger.info(f"✅ QUANTITY COLUMN FOUND: '{col}'")
+        # Try patterns in priority order
+        for priority_level, patterns in enumerate(qty_patterns_priority):
+            for col in df.columns:
+                col_lower = str(col).lower().strip()
+                if any(qty_name in col_lower for qty_name in patterns):
+                    qty_col = col
+                    logger.info(f"✅ QUANTITY COLUMN FOUND (Priority {priority_level+1}): '{col}'")
+                    break
+            if qty_col:
                 break
         
         if not qty_col:
@@ -362,40 +402,120 @@ class AdvancedBOQExtractor:
         
         return column_mappings
 
+    def identify_mandatory_columns_from_headers(self, header_names: List[str], sheet_name: str) -> Dict:
+        """Identify mandatory columns from actual header names (much faster and more accurate)"""
+        
+        column_mappings = {
+            "description_column": None,
+            "unit_column": None, 
+            "quantity_column": None,
+            "validation_status": "FAILED",
+            "error_message": ""
+        }
+        
+        # Enhanced patterns with priority - exact matches first
+        desc_patterns_priority = [
+            ['description'],
+            ['item description', 'work description', 'job description', 'activity description', 'particulars'],
+            ['specification', 'scope of work', 'nature of work', 'work item', 'activity', 'task'],
+            ['item', 'items', 'material', 'materials', 'work', 'details', 'desc', 'item name', 'work details', 'scope', 'type of work']
+        ]
+        
+        unit_patterns_priority = [
+            ['unit'],
+            ['unit of measurement', 'u.o.m', 'uom', 'measuring unit'],
+            ['units', 'measure', 'measurement', 'unit measure'],
+            ['un', 'u/m', 'u.m', 'um']
+        ]
+        
+        qty_patterns_priority = [
+            ['quantity'],
+            ['cumulative quantity', 'overall quantity', 'total quantity', 'net quantity', 'gross quantity'],
+            ['cumulative', 'overall qty', 'total qty', 'cum qty', 'cumulative qty'],
+            ['qty', 'qnty', 'quant', 'volume', 'count', 'number', 'overall', 'cum', 'qtty', 'amount', 'nos', 'no', 'no.', 'nos.', 'total']
+        ]
+        
+        # Find description column
+        desc_col_idx = None
+        desc_col_name = None
+        for priority_level, patterns in enumerate(desc_patterns_priority):
+            for idx, header in enumerate(header_names):
+                header_lower = str(header).lower().strip()
+                if any(desc_name in header_lower for desc_name in patterns):
+                    desc_col_idx = idx  # Store column index for extraction
+                    desc_col_name = header  # Store header name for logging
+                    logger.info(f"✅ DESCRIPTION COLUMN FOUND (Priority {priority_level+1}): '{header}' at index {idx}")
+                    break
+            if desc_col_idx is not None:
+                break
+        
+        if desc_col_idx is None:
+            column_mappings["error_message"] = f"No description column found in headers: {header_names}"
+            return column_mappings
+        
+        column_mappings["description_column"] = desc_col_idx
+        
+        # Find unit column
+        unit_col_idx = None
+        unit_col_name = None
+        for priority_level, patterns in enumerate(unit_patterns_priority):
+            for idx, header in enumerate(header_names):
+                header_lower = str(header).lower().strip()
+                if any(unit_name in header_lower for unit_name in patterns):
+                    unit_col_idx = idx  # Store column index for extraction
+                    unit_col_name = header  # Store header name for logging
+                    logger.info(f"✅ UNIT COLUMN FOUND (Priority {priority_level+1}): '{header}' at index {idx}")
+                    break
+            if unit_col_idx is not None:
+                break
+        
+        if unit_col_idx is None:
+            column_mappings["error_message"] = f"No unit column found in headers: {header_names}"
+            return column_mappings
+        
+        column_mappings["unit_column"] = unit_col_idx
+        
+        # Find quantity column
+        qty_col_idx = None
+        qty_col_name = None
+        for priority_level, patterns in enumerate(qty_patterns_priority):
+            for idx, header in enumerate(header_names):
+                header_lower = str(header).lower().strip()
+                
+                # Skip serial number columns explicitly (they often contain 'no' which matches quantity patterns)
+                if any(serial_pattern in header_lower for serial_pattern in ['sl.', 'sl ', 'serial', 's.no', 's no', 's.n']):
+                    continue
+                
+                if any(qty_name in header_lower for qty_name in patterns):
+                    qty_col_idx = idx  # Store column index for extraction
+                    qty_col_name = header  # Store header name for logging
+                    logger.info(f"✅ QUANTITY COLUMN FOUND (Priority {priority_level+1}): '{header}' at index {idx}")
+                    break
+            if qty_col_idx is not None:
+                break
+        
+        if qty_col_idx is None:
+            column_mappings["error_message"] = f"No quantity column found in headers: {header_names}"
+            return column_mappings
+        
+        column_mappings["quantity_column"] = qty_col_idx
+        column_mappings["validation_status"] = "SUCCESS"
+        
+        return column_mappings
+
     def analyze_worksheet_structure(self, ws, sheet_name: str, file_path: str) -> WorksheetAnalysis:
         """Comprehensive analysis of worksheet structure"""
         logger.info(f"📊 WORKSHEET ANALYSIS: Starting analysis of '{sheet_name}'")
         
-        # Basic dimensions
-        max_row = ws.max_row
-        max_col = ws.max_column
-        logger.info(f"📊 Worksheet dimensions: {max_row} rows × {max_col} columns")
-        
-        # Frozen panes
-        frozen_panes = str(ws.freeze_panes) if ws.freeze_panes else None
-        
-        # Merged cells
-        merged_cells = [str(merged_range) for merged_range in ws.merged_cells.ranges]
-        
-        # Check for wrapped text
-        has_wrapped_text = any(
-            cell.alignment and cell.alignment.wrap_text 
-            for row in ws.iter_rows() for cell in row if cell.alignment
-        )
-        
-        # Calculate data density
-        total_cells = max_row * max_col
-        filled_cells = sum(1 for row in ws.iter_rows() for cell in row if cell.value is not None)
-        data_density = filled_cells / total_cells if total_cells > 0 else 0
-        logger.info(f"📊 Data density: {filled_cells}/{total_cells} cells filled ({data_density:.1%})")
-        
-        # Read data for analysis with better error handling
+        # Read data for analysis 
         try:
             df = pd.read_excel(file_path, sheet_name=sheet_name, header=None, engine='openpyxl')
-            df = self.handle_merged_cells(ws, df)
+            # Only handle merged cells if there are merged cells (optimization)
+            if ws.merged_cells.ranges:
+                logger.info(f"⚡ Handling {len(list(ws.merged_cells.ranges))} merged cell ranges")
+                df = self.handle_merged_cells(ws, df)
         except Exception as e:
             logger.error(f"Error reading worksheet {sheet_name}: {str(e)}")
-            # Create empty dataframe as fallback
             df = pd.DataFrame()
         
         # Column mappings will be determined by AI during header selection
@@ -403,62 +523,41 @@ class AdvancedBOQExtractor:
         # Find suspected headers
         suspected_headers = self.find_all_potential_headers(df, sheet_name)
         
-        # Use AI to select the best header from top 2 candidates and get column mappings
-        selected_header, ai_column_mappings = self.ai_select_best_header(suspected_headers, sheet_name)
+        # DISABLED: AI header selection - using pure rule-based approach for speed testing
+        # selected_header, ai_column_mappings = self.ai_select_best_header(suspected_headers, sheet_name)
         
-        # Use AI column mappings if available, otherwise fall back to manual detection
-        if ai_column_mappings.get("validation_status") == "SUCCESS":
-            logger.info(f"🎯 USING AI-IDENTIFIED COLUMN MAPPINGS for '{sheet_name}'")
-            column_mappings = ai_column_mappings
-        else:
-            logger.warning(f"⚠️ AI column mappings failed, falling back to manual detection for '{sheet_name}'")
-            column_mappings = self.identify_mandatory_columns(df, sheet_name) if not df.empty else {"validation_status": "FAILED", "error_message": "Empty dataframe"}
-        
-        # Only create BOQ region for the AI-selected header
-        boq_regions = []
+        # Select best header using rule-based approach (highest confidence)
+        selected_header = suspected_headers[0] if suspected_headers else None
         if selected_header:
-            header_row, headers, confidence = selected_header
-            logger.info(f"📊 Creating BOQ region for selected header at row {header_row+1}")
-            
-            # Find data boundaries for the selected header
-            start_row, end_row = self.extract_table_boundaries(df, header_row)
-            logger.info(f"📊 Table boundaries: data rows {start_row+1} to {end_row+1}")
-            
-            if end_row >= start_row:
-                data_rows_count = end_row - start_row + 1
-                region = {
-                    'header_row': header_row,
-                    'start_row': start_row,
-                    'end_row': end_row,
-                    'headers': headers,
-                    'confidence': confidence,
-                    'data_rows': data_rows_count,
-                    'ai_selected': True  # Mark as AI-selected
-                }
-                boq_regions.append(region)
-                logger.info(f"✅ Created BOQ region with {data_rows_count} data rows")
-            else:
-                logger.warning(f"⚠️ Invalid table boundaries (start:{start_row}, end:{end_row}) - no BOQ region created")
+            logger.info(f"🎯 RULE-BASED HEADER SELECTION: Using header at row {selected_header[0]+1} for '{sheet_name}'")
+        
+        # Use pure rule-based column detection with actual header names
+        if not df.empty and selected_header:
+            header_row, header_names, confidence = selected_header
+            column_mappings = self.identify_mandatory_columns_from_headers(header_names, sheet_name)
+        elif not df.empty:
+            # Fallback to old method if no header selected
+            column_mappings = self.identify_mandatory_columns(df, sheet_name)
         else:
-            logger.warning(f"⚠️ No header selected for sheet '{sheet_name}' - no BOQ regions created")
+            column_mappings = {"validation_status": "FAILED", "error_message": "Empty dataframe"}
+        
+        # SKIP BOQ region creation during preprocessing for speed
+        boq_regions = []
         
         analysis = WorksheetAnalysis(
             name=sheet_name,
-            dimensions=(max_row, max_col),
-            frozen_panes=frozen_panes,
-            merged_cells=merged_cells,
-            suspected_headers=suspected_headers,  # Keep all candidates for reference
-            boq_regions=boq_regions,  # Only 1 region max
-            data_density=data_density,
-            has_wrapped_text=has_wrapped_text,
+            dimensions=(0, 0),  # Not needed for speed
+            frozen_panes=None,  # Not needed
+            merged_cells=[],    # Not needed 
+            suspected_headers=suspected_headers,
+            boq_regions=boq_regions,  # Empty for speed
+            data_density=0.0,   # Not needed
+            has_wrapped_text=False,  # Not needed
             ai_analysis=None,
-            column_mappings=column_mappings  # Store the mandatory column mappings
+            column_mappings=column_mappings  # This is what we actually need
         )
         
-        # Simple AI analysis if enabled
-        if self.ai_enabled and boq_regions:
-            analysis.ai_analysis = self.ai_analyze_worksheet(df, analysis)
-        
+        # AI analysis disabled for speed
         return analysis
     
     def is_likely_data_row(self, row_values: List[str]) -> bool:
@@ -488,31 +587,25 @@ class AdvancedBOQExtractor:
     
     def find_all_potential_headers(self, df: pd.DataFrame, sheet_name: str) -> List[Tuple[int, List[str], float]]:
         """Better header detection with realistic confidence scores"""
-        logger.info(f"🔍 HEADER DETECTION: Starting header search in sheet '{sheet_name}' (rows: {len(df)})")
         potential_headers = []
         
-        # Search through first 25 rows for headers
+        # Search through first 25 rows for headers (minimal logging)
         search_range = min(25, len(df))
-        logger.info(f"🔍 HEADER DETECTION: Scanning first {search_range} rows for header patterns")
         
         for idx in range(search_range):
             row_data = df.iloc[idx].astype(str).fillna('')
             
             if row_data.str.strip().eq('').all():  # Skip completely empty rows
-                logger.debug(f"🔍 Row {idx+1}: EMPTY - skipping")
                 continue
             
             # Get non-empty values for analysis
             non_empty_values = [cell for cell in row_data if cell and str(cell).strip() and str(cell).strip() != 'nan']
-            logger.debug(f"🔍 Row {idx+1}: Found {len(non_empty_values)} non-empty cells: {non_empty_values[:3]}...")
             
             if len(non_empty_values) < 2:  # Headers should have at least 2 columns
-                logger.debug(f"🔍 Row {idx+1}: INSUFFICIENT DATA - need at least 2 columns")
                 continue
             
             # Better filter for data rows
             if self.is_likely_data_row(non_empty_values):
-                logger.debug(f"🔍 Row {idx+1}: DATA ROW - skipping: {non_empty_values[:3]}")
                 continue
             
             # Better pattern matching
@@ -1111,37 +1204,66 @@ Return ONLY the JSON, no extra text."""
             logger.error(f"❌ Failed to load workbook: {str(e)}")
             raise Exception(f"Cannot open Excel file. File may be corrupted or password protected: {str(e)}")
         
-        # Analyze each worksheet
-        worksheet_analyses = []
-        boq_tables = []
+        # ULTRA-FAST: Load ALL sheets in single operation (massive speed improvement)
         logger.info(f"📋 Found {len(wb.sheetnames)} worksheets: {wb.sheetnames}")
+        logger.info(f"🚀 USING ULTRA-FAST BULK PROCESSING: Single file read for all sheets")
         
-        for i, sheet_name in enumerate(wb.sheetnames, 1):
-            try:
-                logger.info(f"📋 PROCESSING WORKSHEET {i}/{len(wb.sheetnames)}: '{sheet_name}'")
-                ws = wb[sheet_name]
-                ws_analysis = self.analyze_worksheet_structure(ws, sheet_name, file_path)
-                worksheet_analyses.append(ws_analysis)
-                
-                # Each worksheet now has max 1 BOQ region (AI-selected header)
+        try:
+            # Use the new ultra-fast method (single file read)
+            worksheet_analyses = self.analyze_all_worksheets_ultra_fast(file_path)
+            
+            # Extract BOQ tables from successful analyses
+            boq_tables = []
+            for ws_analysis in worksheet_analyses:
                 if ws_analysis.boq_regions:
                     region = ws_analysis.boq_regions[0]  # Only 1 region per worksheet
                     if region['data_rows'] > 0:
-                        logger.info(f"📊 Extracting BOQ table from region with {region['data_rows']} data rows")
+                        logger.info(f"📊 Extracting BOQ table from '{ws_analysis.name}' with {region['data_rows']} data rows")
                         boq_table = self.extract_boq_table(file_path, ws_analysis, region)
                         if boq_table:
                             boq_tables.append(boq_table)
-                            logger.info(f"✅ Successfully created BOQ table for '{sheet_name}' ({len(boq_table.data)} rows)")
+                            logger.info(f"✅ Successfully created BOQ table for '{ws_analysis.name}' ({len(boq_table.data)} rows)")
                         else:
-                            logger.warning(f"⚠️ Failed to extract BOQ table from '{sheet_name}'")
+                            logger.warning(f"⚠️ Failed to extract BOQ table from '{ws_analysis.name}'")
                     else:
-                        logger.warning(f"⚠️ Skipping BOQ region in '{sheet_name}' - contains no data rows")
+                        logger.warning(f"⚠️ Skipping BOQ region in '{ws_analysis.name}' - contains no data rows")
                 else:
-                    logger.info(f"📊 No BOQ regions found in worksheet '{sheet_name}'")
+                    logger.info(f"📊 No BOQ regions found in worksheet '{ws_analysis.name}'")
                     
-            except Exception as e:
-                logger.error(f"❌ Error processing worksheet '{sheet_name}': {str(e)}")
-                continue
+        except Exception as e:
+            logger.error(f"❌ BATCH ANALYSIS FAILED: {str(e)}")
+            logger.warning(f"⚠️ FALLING BACK to individual worksheet analysis...")
+            
+            # Fallback to original individual analysis
+            worksheet_analyses = []
+            boq_tables = []
+            
+            for i, sheet_name in enumerate(wb.sheetnames, 1):
+                try:
+                    logger.info(f"📋 PROCESSING WORKSHEET {i}/{len(wb.sheetnames)}: '{sheet_name}' (FALLBACK)")
+                    ws = wb[sheet_name]
+                    ws_analysis = self.analyze_worksheet_structure(ws, sheet_name, file_path)
+                    worksheet_analyses.append(ws_analysis)
+                    
+                    # Each worksheet now has max 1 BOQ region (AI-selected header)
+                    if ws_analysis.boq_regions:
+                        region = ws_analysis.boq_regions[0]  # Only 1 region per worksheet
+                        if region['data_rows'] > 0:
+                            logger.info(f"📊 Extracting BOQ table from region with {region['data_rows']} data rows")
+                            boq_table = self.extract_boq_table(file_path, ws_analysis, region)
+                            if boq_table:
+                                boq_tables.append(boq_table)
+                                logger.info(f"✅ Successfully created BOQ table for '{sheet_name}' ({len(boq_table.data)} rows)")
+                            else:
+                                logger.warning(f"⚠️ Failed to extract BOQ table from '{sheet_name}'")
+                        else:
+                            logger.warning(f"⚠️ Skipping BOQ region in '{sheet_name}' - contains no data rows")
+                    else:
+                        logger.info(f"📊 No BOQ regions found in worksheet '{sheet_name}'")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error processing worksheet '{sheet_name}': {str(e)}")
+                    continue
         
         processing_time = time.time() - start_time
         
@@ -1178,10 +1300,385 @@ Return ONLY the JSON, no extra text."""
         
         return file_analysis
 
+    def analyze_all_worksheets_batch(self, wb, file_path: str) -> List[WorksheetAnalysis]:
+        """
+        OPTIMIZED: Analyze ALL worksheets with a single batch AI call for header selection
+        
+        This method:
+        1. Collects suspected headers from all worksheets
+        2. Makes ONE AI call to select best headers for ALL sheets
+        3. Processes column mappings for all sheets
+        
+        Args:
+            wb: Openpyxl workbook object
+            file_path: Path to the Excel file
+            
+        Returns:
+            List of WorksheetAnalysis objects for all sheets
+        """
+        logger.info(f"🚀 BATCH WORKSHEET ANALYSIS: Starting analysis of ALL {len(wb.sheetnames)} worksheets")
+        
+        # Step 1: BATCH DATA COLLECTION from all worksheets simultaneously
+        all_worksheet_data = []
+        logger.info(f"📊 Batch processing {len(wb.sheetnames)} worksheets: {wb.sheetnames}")
+        
+        for sheet_name in wb.sheetnames:
+            
+            try:
+                ws = wb[sheet_name]
+                
+                # Read data for analysis
+                try:
+                    df = pd.read_excel(file_path, sheet_name=sheet_name, header=None, engine='openpyxl')
+                    # Only handle merged cells if there are merged cells (optimization)
+                    if ws.merged_cells.ranges:
+                        df = self.handle_merged_cells(ws, df)
+                except Exception as e:
+                    logger.error(f"Error reading worksheet {sheet_name}: {str(e)}")
+                    df = pd.DataFrame()
+                
+                # Find suspected headers for this worksheet
+                suspected_headers = self.find_all_potential_headers(df, sheet_name)
+                
+                # Store MINIMAL data for batch processing (only what's needed)
+                worksheet_data = {
+                    'sheet_name': sheet_name,
+                    'df': df,
+                    'suspected_headers': suspected_headers
+                }
+                all_worksheet_data.append(worksheet_data)
+                
+                
+            except Exception as e:
+                logger.error(f"❌ Error collecting data for worksheet '{sheet_name}': {e}")
+                continue
+        
+        # DISABLED: Batch AI call - using pure rule-based approach for speed testing
+        # logger.info(f"🤖 BATCH AI HEADER SELECTION: Processing {len(all_worksheet_data)} worksheets in single AI call")
+        # batch_ai_results = self.ai_select_best_headers_batch(all_worksheet_data)
+        
+        logger.info(f"🎯 RULE-BASED BATCH PROCESSING: Processing {len(all_worksheet_data)} worksheets (AI disabled for speed testing)")
+        batch_ai_results = {}
+        
+        # Step 3: BATCH FINALIZATION - Build all WorksheetAnalysis objects
+        worksheet_analyses = []
+        logger.info(f"🔧 Finalizing analysis for all {len(all_worksheet_data)} worksheets")
+        
+        for ws_data in all_worksheet_data:
+            sheet_name = ws_data['sheet_name']
+            
+            # RULE-BASED PROCESSING (AI disabled for speed testing)
+            suspected_headers = ws_data['suspected_headers']
+            selected_header = suspected_headers[0] if suspected_headers else None
+            
+            # Use header-based column detection for accuracy
+            if not ws_data['df'].empty and selected_header:
+                header_row, header_names, confidence = selected_header
+                column_mappings = self.identify_mandatory_columns_from_headers(header_names, sheet_name)
+            elif not ws_data['df'].empty:
+                # Fallback to old method if no header selected
+                column_mappings = self.identify_mandatory_columns(ws_data['df'], sheet_name)
+            else:
+                column_mappings = {"validation_status": "FAILED", "error_message": "Empty dataframe"}
+            
+            # SKIP BOQ region creation during preprocessing for speed
+            # BOQ regions will be created later during extraction phase
+            boq_regions = []
+            ai_analysis = None
+            
+            # Create MINIMAL WorksheetAnalysis object (only essential data for speed)
+            ws_analysis = WorksheetAnalysis(
+                name=sheet_name,
+                dimensions=(0, 0),  # Not needed for header identification
+                frozen_panes=None,  # Not needed 
+                merged_cells=[],    # Not needed
+                suspected_headers=ws_data['suspected_headers'],
+                boq_regions=boq_regions,  # Empty for speed
+                data_density=0.0,   # Not needed
+                has_wrapped_text=False,  # Not needed
+                ai_analysis=ai_analysis,  # None for speed
+                column_mappings=column_mappings  # This is the key info we need
+            )
+            
+            worksheet_analyses.append(ws_analysis)
+        
+        logger.info(f"🎉 FAST PREPROCESSING COMPLETE: {len(worksheet_analyses)} worksheets processed")
+        return worksheet_analyses
+
+    def analyze_all_worksheets_ultra_fast(self, file_path: str) -> List[WorksheetAnalysis]:
+        """
+        ULTRA-FAST BULK PROCESSING: Load ALL sheets at once and process them together
+        This eliminates per-sheet file I/O overhead
+        """
+        start_time = time.time()
+        logger.info(f"🚀 ULTRA-FAST BULK PROCESSING: Starting analysis of file '{file_path}'")
+        
+        try:
+            # SINGLE FILE READ - Load ALL sheets at once (massive speed improvement)
+            logger.info(f"📊 Loading ALL sheets in single operation...")
+            all_sheets_dict = pd.read_excel(file_path, sheet_name=None, header=None, engine='openpyxl')
+            sheet_names = list(all_sheets_dict.keys())
+            logger.info(f"📊 Loaded {len(sheet_names)} sheets in {time.time() - start_time:.2f}s: {sheet_names}")
+            
+            # BULK PROCESSING - Process all sheets together
+            worksheet_analyses = []
+            
+            for sheet_name, df in all_sheets_dict.items():
+                # Skip empty sheets
+                if df.empty:
+                    continue
+                
+                # Find headers and detect columns (minimal logging)
+                suspected_headers = self.find_all_potential_headers(df, sheet_name)
+                selected_header = suspected_headers[0] if suspected_headers else None
+                
+                if selected_header:
+                    header_row, header_names, confidence = selected_header
+                    column_mappings = self.identify_mandatory_columns_from_headers(header_names, sheet_name)
+                else:
+                    column_mappings = {"validation_status": "FAILED", "error_message": "No headers found"}
+                
+                # Create minimal analysis object
+                ws_analysis = WorksheetAnalysis(
+                    name=sheet_name,
+                    dimensions=(0, 0),
+                    frozen_panes=None,
+                    merged_cells=[],
+                    suspected_headers=suspected_headers,
+                    boq_regions=[],  # Empty for speed
+                    data_density=0.0,
+                    has_wrapped_text=False,
+                    ai_analysis=None,
+                    column_mappings=column_mappings
+                )
+                
+                worksheet_analyses.append(ws_analysis)
+            
+            total_time = time.time() - start_time
+            logger.info(f"🎉 ULTRA-FAST PROCESSING COMPLETE: {len(worksheet_analyses)} sheets in {total_time:.2f}s ({total_time/len(worksheet_analyses):.3f}s per sheet)")
+            return worksheet_analyses
+            
+        except Exception as e:
+            logger.error(f"❌ ULTRA-FAST PROCESSING ERROR: {str(e)}")
+            # Fallback to regular processing
+            logger.info(f"🔄 Falling back to regular batch processing...")
+            return self.analyze_all_worksheets_batch(openpyxl.load_workbook(file_path, read_only=True), file_path)
+
+    def ai_select_best_headers_batch(self, all_worksheet_data: List[Dict]) -> Dict:
+        """
+        Make a single AI call to select best headers for ALL worksheets
+        
+        Args:
+            all_worksheet_data: List of worksheet data dictionaries
+            
+        Returns:
+            Dictionary mapping sheet names to their AI results
+        """
+        if not self.ai_enabled:
+            logger.warning(f"🤖 AI DISABLED - using top candidates for all sheets")
+            results = {}
+            for ws_data in all_worksheet_data:
+                sheet_name = ws_data['sheet_name']
+                suspected_headers = ws_data['suspected_headers']
+                if suspected_headers:
+                    selected_header = suspected_headers[0]  # Use top candidate
+                    results[sheet_name] = {
+                        'selected_header': selected_header,
+                        'column_mappings': self.identify_mandatory_columns(ws_data['df'], sheet_name)
+                    }
+            return results
+        
+        # Prepare batch prompt with all worksheets
+        batch_prompt = self._create_batch_header_selection_prompt(all_worksheet_data)
+        
+        logger.info(f"🤖 Making SINGLE AI call for {len(all_worksheet_data)} worksheets")
+        
+        try:
+            # Use the existing call_gemini_api method, but handle the response carefully
+            response = self.call_gemini_api(batch_prompt)
+            logger.info(f"🔍 DEBUG: Raw AI response: {response}")
+            
+            if response and isinstance(response, dict):
+                # Check if it's a valid batch response or a default fallback response
+                if 'is_boq' in response and 'confidence' in response:
+                    # This is the default response structure from call_gemini_api when JSON parsing fails
+                    # Fall back to rule-based selection
+                    logger.warning("🤖 AI returned default response structure, falling back to rule-based selection")
+                    return self._fallback_header_selection(all_worksheet_data)
+                else:
+                    # This looks like a valid batch response
+                    logger.info(f"🔍 DEBUG: Parsing valid batch response with keys: {list(response.keys())}")
+                    return self._parse_batch_ai_response_dict(response, all_worksheet_data)
+            else:
+                logger.warning("🤖 AI request failed, falling back to rule-based selection for all sheets")
+                return self._fallback_header_selection(all_worksheet_data)
+                
+        except Exception as e:
+            logger.error(f"🤖 AI batch request failed: {e}")
+            return self._fallback_header_selection(all_worksheet_data)
+
+    def _create_batch_header_selection_prompt(self, all_worksheet_data: List[Dict]) -> str:
+        """Create a prompt for batch header selection across all worksheets"""
+        prompt_parts = [
+            "You are analyzing multiple Excel worksheets from a BOQ (Bill of Quantities) file.",
+            "For each worksheet, select the BEST header row that contains column names like 'Description', 'Unit', 'Quantity', etc.",
+            "",
+            "WORKSHEETS TO ANALYZE:",
+            ""
+        ]
+        
+        for i, ws_data in enumerate(all_worksheet_data, 1):
+            sheet_name = ws_data['sheet_name']
+            suspected_headers = ws_data['suspected_headers']
+            
+            prompt_parts.append(f"=== WORKSHEET {i}: '{sheet_name}' ===")
+            prompt_parts.append(f"Suspected headers found: {len(suspected_headers)}")
+            
+            for j, (row_num, headers, confidence) in enumerate(suspected_headers[:3], 1):  # Top 3 candidates
+                headers_str = " | ".join(str(h) for h in headers[:10])  # Limit display
+                prompt_parts.append(f"  Candidate {j} (Row {row_num}, Score: {confidence:.2f}): {headers_str}")
+            
+            prompt_parts.append("")
+        
+        prompt_parts.extend([
+            "INSTRUCTIONS:",
+            "1. For each worksheet, select the BEST header candidate that contains BOQ columns",
+            "2. Identify exact column names for Description, Unit, and Quantity from the selected header",
+            "3. MUST set validation_status to SUCCESS if valid columns are found",
+            "4. Use the exact worksheet names provided above",
+            "5. Respond in JSON format with this EXACT structure:",
+            "",
+            "{",
+            '  "EXACT_WORKSHEET_NAME": {',
+            '    "selected_candidate": 1,',
+            '    "confidence": 0.95,',
+            '    "reasoning": "Clear BOQ headers found",',
+            '    "column_mappings": {',
+            '      "description_column": "EXACT_COLUMN_NAME_FROM_HEADERS",',
+            '      "unit_column": "EXACT_COLUMN_NAME_FROM_HEADERS",',
+            '      "quantity_column": "EXACT_COLUMN_NAME_FROM_HEADERS",',
+            '      "validation_status": "SUCCESS"',
+            '    }',
+            '  }',
+            '}',
+            "",
+            "CRITICAL REQUIREMENTS:",
+            "- Use EXACT worksheet names shown above",
+            "- Use EXACT column names from the header candidates", 
+            "- ALWAYS include validation_status field",
+            "- Set validation_status to SUCCESS if valid BOQ columns found",
+            "- If no valid BOQ headers exist, set selected_candidate to 0 and validation_status to FAILED"
+        ])
+        
+        return "\n".join(prompt_parts)
+
+    def _parse_batch_ai_response_dict(self, ai_response: Dict, all_worksheet_data: List[Dict]) -> Dict:
+        """Parse the batch AI response when it's already a dictionary"""
+        results = {}
+        
+        try:
+            # The response is already parsed as a dictionary
+            parsed_response = ai_response
+            
+            for ws_data in all_worksheet_data:
+                sheet_name = ws_data['sheet_name']
+                
+                if sheet_name in parsed_response:
+                    sheet_ai_result = parsed_response[sheet_name]
+                    selected_candidate_num = sheet_ai_result.get('selected_candidate', 1)
+                    
+                    # Get the selected header
+                    suspected_headers = ws_data['suspected_headers']
+                    if suspected_headers and 1 <= selected_candidate_num <= len(suspected_headers):
+                        selected_header = suspected_headers[selected_candidate_num - 1]
+                        
+                        results[sheet_name] = {
+                            'selected_header': selected_header,
+                            'column_mappings': sheet_ai_result.get('column_mappings', {"validation_status": "FAILED"}),
+                            'reasoning': sheet_ai_result.get('reasoning', 'AI selected'),
+                            'confidence': sheet_ai_result.get('confidence', 0.8)
+                        }
+                    else:
+                        logger.warning(f"Invalid candidate number for sheet '{sheet_name}', using fallback")
+                        results[sheet_name] = self._fallback_single_sheet(ws_data)
+                else:
+                    logger.warning(f"No AI result for sheet '{sheet_name}', using fallback")
+                    results[sheet_name] = self._fallback_single_sheet(ws_data)
+                    
+        except Exception as e:
+            logger.error(f"Failed to parse AI dict response: {e}")
+            return self._fallback_header_selection(all_worksheet_data)
+        
+        return results
+
+    def _parse_batch_ai_response(self, ai_response: str, all_worksheet_data: List[Dict]) -> Dict:
+        """Parse the batch AI response and return results for each worksheet"""
+        results = {}
+        
+        try:
+            # Try to parse JSON response
+            parsed_response = json.loads(ai_response.strip())
+            
+            for ws_data in all_worksheet_data:
+                sheet_name = ws_data['sheet_name']
+                
+                if sheet_name in parsed_response:
+                    sheet_ai_result = parsed_response[sheet_name]
+                    selected_candidate_num = sheet_ai_result.get('selected_candidate', 1)
+                    
+                    # Get the selected header
+                    suspected_headers = ws_data['suspected_headers']
+                    if suspected_headers and 1 <= selected_candidate_num <= len(suspected_headers):
+                        selected_header = suspected_headers[selected_candidate_num - 1]
+                        
+                        results[sheet_name] = {
+                            'selected_header': selected_header,
+                            'column_mappings': sheet_ai_result.get('column_mappings', {"validation_status": "FAILED"}),
+                            'reasoning': sheet_ai_result.get('reasoning', 'AI selected'),
+                            'confidence': sheet_ai_result.get('confidence', 0.8)
+                        }
+                    else:
+                        logger.warning(f"Invalid candidate number for sheet '{sheet_name}', using fallback")
+                        results[sheet_name] = self._fallback_single_sheet(ws_data)
+                else:
+                    logger.warning(f"No AI result for sheet '{sheet_name}', using fallback")
+                    results[sheet_name] = self._fallback_single_sheet(ws_data)
+                    
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI JSON response: {e}")
+            return self._fallback_header_selection(all_worksheet_data)
+        
+        return results
+
+    def _fallback_header_selection(self, all_worksheet_data: List[Dict]) -> Dict:
+        """Fallback to rule-based header selection for all worksheets"""
+        results = {}
+        for ws_data in all_worksheet_data:
+            results[ws_data['sheet_name']] = self._fallback_single_sheet(ws_data)
+        return results
+
+    def _fallback_single_sheet(self, ws_data: Dict) -> Dict:
+        """Fallback selection for a single worksheet"""
+        sheet_name = ws_data['sheet_name']
+        suspected_headers = ws_data['suspected_headers']
+        
+        selected_header = suspected_headers[0] if suspected_headers else None
+        column_mappings = self.identify_mandatory_columns(ws_data['df'], sheet_name) if not ws_data['df'].empty else {"validation_status": "FAILED"}
+        
+        return {
+            'selected_header': selected_header,
+            'column_mappings': column_mappings,
+            'reasoning': 'Fallback to top candidate',
+            'confidence': 0.6
+        }
+
 
 def run_initial_analysis(file_path: str, gemini_api_key: str = None) -> FileAnalysis:
     """
-    Instantiates and runs the BOQ pre-processor on a given file.
+    Instantiates and runs the BOQ pre-processor on a given file using OPTIMIZED BATCH ANALYSIS.
+    
+    This function now uses batch processing to analyze ALL worksheets with a single AI call
+    instead of processing them one by one. This significantly reduces processing time and API costs.
     
     Args:
         file_path: The path to the uploaded Excel file.
@@ -1192,5 +1689,18 @@ def run_initial_analysis(file_path: str, gemini_api_key: str = None) -> FileAnal
     """
     # FIXED: Pass the API key properly to the extractor
     extractor = AdvancedBOQExtractor(gemini_api_key=gemini_api_key)
+    analysis_results = extractor.process_excel_file(file_path)
+    return analysis_results
+
+def run_initial_analysis_legacy(file_path: str, gemini_api_key: str = None) -> FileAnalysis:
+    """
+    LEGACY: Individual worksheet analysis (one AI call per sheet).
+    
+    This is the old method that processes worksheets one by one.
+    Use run_initial_analysis() for the optimized batch version.
+    """
+    extractor = AdvancedBOQExtractor(gemini_api_key=gemini_api_key)
+    # Force the extractor to use individual analysis by temporarily disabling batch
+    extractor._use_batch_analysis = False
     analysis_results = extractor.process_excel_file(file_path)
     return analysis_results

@@ -20,7 +20,23 @@ function App() {
       fileIdentifier: data?.analysis?.file_path || '',
       sheets: data?.analysis?.worksheets?.map((ws: any) => ({
         name: ws?.name || '',
-        isBoq: ws?.has_boq || false
+        isBoq: ws?.column_mappings?.validation_status === "SUCCESS" || false,
+        // Add identified headers based on column mappings
+        headers: ws?.column_mappings && ws?.suspected_headers?.length > 0 ? 
+          (() => {
+            const headerRow = ws.suspected_headers[0]; // Get first (best) header row
+            if (headerRow && headerRow.length > 2) { // [row_index, headers_array, confidence]
+              const headerNames = headerRow[1]; // Headers array
+              const mappings = ws.column_mappings;
+              return [
+                mappings.description_column !== undefined ? headerNames[mappings.description_column] : null,
+                mappings.unit_column !== undefined ? headerNames[mappings.unit_column] : null,
+                mappings.quantity_column !== undefined ? headerNames[mappings.quantity_column] : null
+              ].filter(Boolean);
+            }
+            return [];
+          })() : [],
+        columnMappings: ws?.column_mappings || null
       })) || []
     };
     
@@ -40,32 +56,38 @@ function App() {
       
       console.log('Extraction successful:', response.data);
       
-      // Simplified data transformation using original BOQ data directly
-      const items: any[] = [];
+      // PRESERVE WORKSHEET GROUPING - Keep items organized by sheet
+      const sheets: any[] = [];
       const extractionData = response?.data?.extraction_data;
       if (extractionData && typeof extractionData === 'object') {
-        Object.values(extractionData).forEach((sheetData: any) => {
+        Object.entries(extractionData).forEach(([sheetName, sheetData]: [string, any]) => {
           if (sheetData?.data && Array.isArray(sheetData.data)) {
-            sheetData.data.forEach((item: any, index: number) => {
-              items.push({
-                id: item?.original_row_index || index,
-                Category: item?.final_category || 'OTHERS',
-                Material: item?.final_material || 'Mixed Materials',
-                Grade: item?.extracted_grade || '',
-                Specifications: item?.technical_specs || item?.extracted_dimensions || '',
-                Unit: item?.original_unit || 'Each', // Use original unit directly
-                Quantity: item?.original_quantity || '', // Use original quantity directly
-                originalRow: item?.original_description || '',
-                // Store all original data for verification
-                originalData: item?.original_data || {},
-                rowIndex: item?.original_row_index || index
+            const items = sheetData.data.map((item: any, index: number) => ({
+              id: `${sheetName}_${item?.original_row_index || index}`,
+              Category: item?.final_category || 'OTHERS',
+              Material: item?.final_material || 'Mixed Materials',
+              Grade: item?.extracted_grade || '',
+              Specifications: item?.technical_specs || item?.extracted_dimensions || '',
+              Unit: item?.original_unit || 'Each', // Use original unit directly
+              Quantity: item?.original_quantity || '', // Use original quantity directly
+              originalRow: item?.original_description || '',
+              // Store all original data for verification
+              originalData: item?.original_data || {},
+              rowIndex: item?.original_row_index || index,
+              worksheetName: sheetName  // Add worksheet name
+            }));
+            
+            if (items.length > 0) {
+              sheets.push({
+                name: sheetName,
+                items: items
               });
-            });
+            }
           }
         });
       }
       
-      setExtractionData({ items });
+      setExtractionData({ sheets });
       setAppState('verify');
       
     } catch (err: any) {
@@ -102,18 +124,37 @@ function App() {
     setSummaryData(null);
   };
 
+  const handleBack = () => {
+    switch (appState) {
+      case 'select':
+        setAppState('upload');
+        setFileData(null);
+        break;
+      case 'verify':
+        setAppState('select');
+        setExtractionData(null);
+        break;
+      case 'summary':
+        setAppState('verify');
+        setSummaryData(null);
+        break;
+      default:
+        break;
+    }
+  };
+
   const renderContent = () => {
     switch (appState) {
       case 'upload':
         return <UploadComponent onUploadSuccess={handleUploadSuccess} />;
       case 'select':
-        return <SheetSelectorComponent fileData={fileData} onExtract={handleExtract} />;
+        return <SheetSelectorComponent fileData={fileData} onExtract={handleExtract} onBack={handleBack} />;
       case 'processing':
         return <Spinner message="Processing your request..." />;
       case 'verify':
-        return <VerificationGridComponent extractionData={extractionData} onGenerateSummary={handleGenerateSummary} />;
+        return <VerificationGridComponent extractionData={extractionData} onGenerateSummary={handleGenerateSummary} onBack={handleBack} />;
       case 'summary':
-        return <SummaryComponent summaryData={summaryData} onReset={handleReset} />;
+        return <SummaryComponent summaryData={summaryData} onReset={handleReset} onBack={handleBack} />;
       default:
         return <UploadComponent onUploadSuccess={handleUploadSuccess} />;
     }

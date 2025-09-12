@@ -21,7 +21,7 @@ from .data_structures import ExtractedLineItem, VerifiedHeader
 
 logger = logging.getLogger(__name__)
 
-async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], api_key: str) -> Dict:
+async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], api_key: str, cached_analysis=None) -> Dict:
     """
     Orchestrates the entire 3-stage BOQ extraction process for selected sheets.
     
@@ -29,6 +29,7 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
         file_path: Path to the Excel file
         selected_sheets: List of worksheet names to process
         api_key: Gemini API key (passed to ensure client is initialized)
+        cached_analysis: Pre-computed analysis result (optional, avoids re-running analysis)
         
     Returns:
         Dictionary with results for each sheet
@@ -59,30 +60,40 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
                 all_results[sheet_name] = {"error": f"Sheet {sheet_name} not found in file"}
                 continue
                 
-            # GET COLUMN MAPPINGS AND HEADER ROW: From preprocessor analysis first
-            logger.warning(f"🔍 RETRIEVING COLUMN MAPPINGS: Getting AI-identified columns for '{sheet_name}'")
+            # OPTIMIZATION: Use cached analysis instead of re-running analysis
+            logger.info(f"🔍 RETRIEVING COLUMN MAPPINGS: Using cached analysis for '{sheet_name}'")
             
-            # Run analysis to get column mappings and header row info
-            ws = None
+            # Get analysis data from cache for this specific sheet
             analysis = None
-            try:
-                from openpyxl import load_workbook
-                wb = load_workbook(file_path, data_only=True)
-                if sheet_name in wb.sheetnames:
-                    ws = wb[sheet_name]
-                    analysis = preprocessor.analyze_worksheet_structure(ws, sheet_name, file_path)
-            except Exception as e:
-                logger.error(f"Error loading worksheet for analysis: {e}")
+            if cached_analysis:
+                # Find the worksheet analysis in the cached results
+                for ws_analysis in cached_analysis.worksheets:
+                    if ws_analysis.name == sheet_name:
+                        analysis = ws_analysis
+                        logger.info(f"✅ Found CACHED analysis for sheet '{sheet_name}'")
+                        break
             
-            # Read DataFrame using the correct header row
+            if not analysis:
+                logger.warning(f"⚠️ No cached analysis found for '{sheet_name}', falling back to fresh analysis")
+                # Fallback: run individual analysis for this sheet only
+                try:
+                    from openpyxl import load_workbook
+                    wb = load_workbook(file_path, data_only=True)
+                    if sheet_name in wb.sheetnames:
+                        ws = wb[sheet_name]
+                        analysis = preprocessor.analyze_worksheet_structure(ws, sheet_name, file_path)
+                except Exception as e:
+                    logger.error(f"Error loading worksheet for fallback analysis: {e}")
+            
+            # Read DataFrame using the correct header row from cached analysis
             header_row = 0  # Default
             if analysis and analysis.boq_regions:
                 header_row = analysis.boq_regions[0]['header_row']
-                logger.info(f"📊 Using AI-identified header row: {header_row}")
+                logger.info(f"📊 Using CACHED header row: {header_row}")
             
             try:
                 df = pd.read_excel(xls, sheet_name=sheet_name, header=header_row)
-                logger.info(f"📊 DataFrame columns after reading with header row {header_row}: {list(df.columns)}")
+                logger.info(f"📊 DataFrame columns after reading with cached header row {header_row}: {list(df.columns)}")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to read with header row {header_row}, using default: {e}")
                 df = pd.read_excel(xls, sheet_name=sheet_name)
@@ -92,11 +103,13 @@ async def run_extraction_pipeline(file_path: str, selected_sheets: List[str], ap
                 all_results[sheet_name] = {"error": f"Sheet {sheet_name} is empty"}
                 continue
 
-            # Get column mappings
-            if analysis:
+            # Get column mappings from cached analysis
+            if analysis and hasattr(analysis, 'column_mappings'):
                 column_mappings = analysis.column_mappings
+                logger.info(f"✅ Using CACHED column mappings for '{sheet_name}'")
             else:
                 # Fallback to manual detection on the properly read DataFrame
+                logger.warning(f"⚠️ No cached column mappings, falling back to manual detection for '{sheet_name}'")
                 column_mappings = preprocessor.identify_mandatory_columns(df, sheet_name)
             
             if column_mappings.get("validation_status") != "SUCCESS":
@@ -393,7 +406,7 @@ def generate_summary_file(corrected_data: List[Dict]) -> BytesIO:
         return error_output
 
 
-async def run_complete_boq_processing(file_path: str, selected_sheets: List[str], api_key: str) -> Dict:
+async def run_complete_boq_processing(file_path: str, selected_sheets: List[str], api_key: str, cached_analysis=None) -> Dict:
     """
     Complete BOQ processing pipeline - from file to extracted data.
     This is the main entry point for the orchestrator.
@@ -402,6 +415,7 @@ async def run_complete_boq_processing(file_path: str, selected_sheets: List[str]
         file_path: Path to the Excel file
         selected_sheets: List of worksheet names to process
         api_key: Gemini API key
+        cached_analysis: Pre-computed analysis result (optional, avoids re-running analysis)
         
     Returns:
         Dictionary with extraction results and statistics
@@ -409,8 +423,8 @@ async def run_complete_boq_processing(file_path: str, selected_sheets: List[str]
     logger.info(f"🚀 COMPLETE BOQ PROCESSING: Starting pipeline for {len(selected_sheets)} sheets")
     
     try:
-        # Run the extraction pipeline
-        extraction_results = await run_extraction_pipeline(file_path, selected_sheets, api_key)
+        # Run the extraction pipeline with cached analysis
+        extraction_results = await run_extraction_pipeline(file_path, selected_sheets, api_key, cached_analysis)
         
         # Calculate overall statistics
         total_items = 0

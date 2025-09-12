@@ -89,6 +89,9 @@ else:
 # Ensure upload directory exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# OPTIMIZATION: In-memory cache for analysis results to avoid re-running analysis
+analysis_cache = {}
+
 # FIXED: Initialize Gemini client on startup with better error handling
 try:
     if app.config['GEMINI_API_KEY']:
@@ -276,13 +279,22 @@ def upload_file():
         else:
             logger.info(f"🤖 API key available for AI processing")
         
-        # Run initial analysis using our refactored engine
-        logger.info(f"🚀 Starting initial BOQ analysis for: {unique_filename}")
-        analysis_result = run_initial_analysis(
-            file_path=file_path,
-            gemini_api_key=api_key
-        )
-        logger.info(f"✅ Initial analysis complete for: {unique_filename}")
+        # OPTIMIZATION: Check cache first, only run analysis if not cached
+        if file_path in analysis_cache:
+            logger.info(f"✅ Using CACHED analysis result for: {unique_filename}")
+            analysis_result = analysis_cache[file_path]
+        else:
+            # Run initial analysis using our refactored engine
+            logger.info(f"🚀 Starting initial BOQ analysis for: {unique_filename}")
+            analysis_result = run_initial_analysis(
+                file_path=file_path,
+                gemini_api_key=api_key
+            )
+            logger.info(f"✅ Initial analysis complete for: {unique_filename}")
+            
+            # CACHE the analysis result for future use
+            analysis_cache[file_path] = analysis_result
+            logger.info(f"💾 Analysis result CACHED for: {unique_filename}")
         
         # Serialize the result for JSON response
         serialized_result = serialize_analysis_result(analysis_result)
@@ -315,11 +327,19 @@ def get_worksheets(file_id):
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
         
-        # Re-run analysis to get worksheet info
-        analysis_result = run_initial_analysis(
-            file_path=file_path,
-            gemini_api_key=app.config['GEMINI_API_KEY']
-        )
+        # OPTIMIZATION: Use cached analysis instead of re-running
+        if file_path in analysis_cache:
+            logger.info(f"✅ Using CACHED analysis for worksheet info: {os.path.basename(file_path)}")
+            analysis_result = analysis_cache[file_path]
+        else:
+            # Fallback: run analysis if not cached (shouldn't happen in normal flow)
+            logger.warning(f"⚠️ No cached analysis found, running fresh analysis for: {os.path.basename(file_path)}")
+            analysis_result = run_initial_analysis(
+                file_path=file_path,
+                gemini_api_key=app.config['GEMINI_API_KEY']
+            )
+            # Cache it for future use
+            analysis_cache[file_path] = analysis_result
         
         # Extract worksheet information
         worksheets = []
@@ -377,9 +397,15 @@ def extract_boq():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            logger.info(f"🚀 Running complete BOQ processing pipeline...")
+            # OPTIMIZATION: Get cached analysis to pass to orchestrator
+            cached_analysis = analysis_cache.get(file_path)
+            if cached_analysis:
+                logger.info(f"🚀 Running complete BOQ processing pipeline with CACHED analysis...")
+            else:
+                logger.warning(f"⚠️ No cached analysis found, running without cache...")
+            
             results = loop.run_until_complete(
-                run_complete_boq_processing(file_path, selected_worksheets, app.config['GEMINI_API_KEY'])
+                run_complete_boq_processing(file_path, selected_worksheets, app.config['GEMINI_API_KEY'], cached_analysis)
             )
             logger.info(f"✅ BOQ processing pipeline completed")
         finally:
