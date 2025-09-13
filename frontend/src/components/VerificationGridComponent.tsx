@@ -135,7 +135,7 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
       Specifications: item.Specifications,
       Unit: item.Unit,
       Quantity: item.Quantity,
-      'Original Row': item.originalRow
+      'Description': item.originalRow
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -168,19 +168,45 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
   return (
     <div className="w-full">
       <h2 className="text-3xl font-bold text-gray-800 mb-2 text-center">Verify Extracted Data</h2>
-      <p className="text-gray-500 mb-8 text-center">Review and correct the extracted items below.</p>
+      <p className="text-gray-500 mb-4 text-center">Review and correct the extracted items below.</p>
+      
+      {/* Legend */}
+      <div className="flex justify-center mb-4">
+        <div className="flex items-center gap-6 text-sm">
+          <div className="flex items-center gap-2">
+            <div className="px-3 py-1 bg-teal-50 border border-teal-100 rounded text-xs font-medium text-teal-700">AI Extracted</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded text-xs font-medium text-gray-600">Original File Data</div>
+          </div>
+        </div>
+      </div>
       
       <div className="overflow-x-auto bg-white rounded-lg shadow" style={{maxHeight: '60vh'}}>
         <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-gray-50 sticky top-0 z-10">
+          <thead className="sticky top-0 z-10">
             <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Material</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Grade</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Specifications</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Original Row</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-teal-700 uppercase tracking-wider bg-teal-50 border-r border-teal-100">
+                Category
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-teal-700 uppercase tracking-wider bg-teal-50 border-r border-teal-100">
+                Material
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-teal-700 uppercase tracking-wider bg-teal-50 border-r border-teal-100">
+                Grade
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-teal-700 uppercase tracking-wider bg-teal-50 border-r border-gray-200">
+                Specifications
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider bg-gray-50 border-r border-gray-200">
+                Unit
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider bg-gray-50 border-r border-gray-200">
+                Quantity
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-600 uppercase tracking-wider bg-gray-50">
+                Description
+              </th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
@@ -189,7 +215,7 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
               sheetsData.map(sheet => (
                 <React.Fragment key={sheet.name}>
                   <tr>
-                    <td colSpan={7} className="px-6 py-3 bg-teal-100 text-teal-800 font-bold text-sm">
+                    <td colSpan={7} className="px-6 py-2 bg-gray-50 text-gray-600 font-medium text-xs border-t border-gray-200">
                       Worksheet: {sheet.name}
                     </td>
                   </tr>
@@ -349,7 +375,7 @@ const VerificationGridComponent: React.FC<VerificationGridProps> = ({ extraction
         </button>
         <button 
           onClick={downloadExcel}
-          className="bg-blue-500 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-600 transition-all shadow-md"
+          className="bg-gray-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-gray-700 transition-all shadow-md"
         >
           Download Excel
         </button>

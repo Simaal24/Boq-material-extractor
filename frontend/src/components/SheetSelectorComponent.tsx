@@ -41,7 +41,7 @@ const SheetSelectorComponent: React.FC<SheetSelectorProps> = ({ fileData, onExtr
           const isPreselected = hasValidColumns && sheet.isBoq;
           
           return (
-            <div key={sheet.name} className={`p-4 transition-colors ${
+            <div key={sheet.name} className={`p-2 transition-colors ${
               isPreselected ? 'bg-teal-50' : 'hover:bg-gray-50'
             }`}>
               <label className="flex items-center cursor-pointer">
@@ -49,9 +49,9 @@ const SheetSelectorComponent: React.FC<SheetSelectorProps> = ({ fileData, onExtr
                   type="checkbox"
                   checked={selectedSheets.includes(sheet.name)}
                   onChange={() => handleCheckboxChange(sheet.name)}
-                  className="h-5 w-5 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
+                  className="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500"
                 />
-                <span className="ml-4 text-lg text-gray-700 font-medium">{sheet.name}</span>
+                <span className="ml-3 text-sm text-gray-700 font-medium">{sheet.name}</span>
                 
                 {/* Status badges */}
                 {hasValidColumns ? (
@@ -71,11 +71,11 @@ const SheetSelectorComponent: React.FC<SheetSelectorProps> = ({ fileData, onExtr
               
               {/* Show identified headers when selected */}
               {selectedSheets.includes(sheet.name) && hasValidColumns && sheet.headers && sheet.headers.length > 0 && (
-                <div className="mt-3 ml-9 pl-1">
-                  <p className="text-xs text-gray-500 mb-2 font-medium">Identified Headers:</p>
-                  <div className="flex flex-wrap gap-2">
+                <div className="mt-1 ml-7">
+                  <p className="text-xs text-gray-500 mb-1 font-medium">Identified Headers:</p>
+                  <div className="flex flex-wrap gap-1">
                     {sheet.headers.map(header => (
-                      <span key={header} className="bg-green-200 text-green-800 text-xs font-medium px-2.5 py-1 rounded-full">
+                      <span key={header} className="bg-green-200 text-green-800 text-xs font-medium px-1.5 py-0.5 rounded">
                         {header}
                       </span>
                     ))}
@@ -85,9 +85,9 @@ const SheetSelectorComponent: React.FC<SheetSelectorProps> = ({ fileData, onExtr
               
               {/* Show warning for unidentified sheets */}
               {selectedSheets.includes(sheet.name) && sheet.isBoq && !hasValidColumns && (
-                <div className="mt-3 ml-9 pl-1">
-                  <p className="text-xs text-red-600 mb-2 font-medium">Header identification incomplete</p>
-                  <p className="text-xs text-gray-500">This sheet may not extract properly due to missing mandatory headers.</p>
+                <div className="mt-1 ml-7">
+                  <p className="text-xs text-red-600 mb-1 font-medium">Header identification incomplete</p>
+                  <p className="text-xs text-gray-500">May not extract properly due to missing headers.</p>
                 </div>
               )}
             </div>

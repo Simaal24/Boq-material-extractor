@@ -263,12 +263,21 @@ class AdvancedBOQExtractor:
             # Lower priority - more generic patterns
             ['item', 'items', 'material', 'materials', 'work', 'details', 'desc', 'item name', 'work details', 'scope', 'type of work']
         ]
+        
+        # Serial number exclusion patterns - these columns should NEVER be description columns
+        serial_exclusion_patterns = ['item no', 'sl. no', 'sl.no', 'slno', 's.no', 's no', 'sr. no', 'sr.no', 'srno', 'serial', 'serial no', 'sno', 'item number', 'row number', 'line no', 'entry no']
+        
         desc_col = None
         
         # Try patterns in priority order
         for priority_level, patterns in enumerate(desc_patterns_priority):
             for col in df.columns:
                 col_lower = str(col).lower().strip()
+                
+                # SKIP if this is clearly a serial number column
+                if any(serial_pattern in col_lower for serial_pattern in serial_exclusion_patterns):
+                    continue
+                    
                 if any(desc_name in col_lower for desc_name in patterns):
                     desc_col = col
                     logger.info(f"✅ DESCRIPTION COLUMN FOUND (Priority {priority_level+1}): '{col}'")
@@ -277,8 +286,9 @@ class AdvancedBOQExtractor:
                 break
         
         if not desc_col:
-            # Fallback: longest text column
-            text_columns = [col for col in df.columns if df[col].dtype == 'object']
+            # Fallback: longest text column (excluding serial number columns)
+            text_columns = [col for col in df.columns if df[col].dtype == 'object' and 
+                          not any(serial_pattern in str(col).lower().strip() for serial_pattern in serial_exclusion_patterns)]
             if text_columns:
                 text_lengths = {col: df[col].astype(str).str.len().mean() for col in text_columns}
                 desc_col = max(text_lengths, key=text_lengths.get)
@@ -307,6 +317,12 @@ class AdvancedBOQExtractor:
         for priority_level, patterns in enumerate(unit_patterns_priority):
             for col in df.columns:
                 col_lower = str(col).lower().strip()
+                
+                # SKIP if this is clearly a serial number column or already identified as description
+                if (any(serial_pattern in col_lower for serial_pattern in serial_exclusion_patterns) or 
+                    col == desc_col):
+                    continue
+                    
                 if any(unit_name in col_lower for unit_name in patterns):
                     unit_col = col
                     logger.info(f"✅ UNIT COLUMN FOUND (Priority {priority_level+1}): '{col}'")
@@ -315,9 +331,12 @@ class AdvancedBOQExtractor:
                 break
         
         if not unit_col:
-            # Look for short text columns with unit-like values
+            # Look for short text columns with unit-like values (excluding serial number columns)
             for col in df.columns:
-                if df[col].dtype == 'object' and col != desc_col:
+                col_lower = str(col).lower().strip()
+                
+                if (df[col].dtype == 'object' and col != desc_col and
+                    not any(serial_pattern in col_lower for serial_pattern in serial_exclusion_patterns)):
                     avg_length = df[col].astype(str).str.len().mean()
                     if avg_length < 10:  # Short text
                         sample_values = df[col].dropna().astype(str).str.lower().unique()[:10]
@@ -338,11 +357,11 @@ class AdvancedBOQExtractor:
             # HIGHEST PRIORITY - exact matches first
             ['quantity'],
             # High priority - most specific quantity patterns
-            ['cumulative quantity', 'overall quantity', 'total quantity', 'net quantity', 'gross quantity'],
+            ['cumulative quantity', 'overall quantity', 'total quantity', 'net quantity', 'gross quantity', 'variation in quantity', 'variation in qty'],
             # Medium priority - common quantity patterns
-            ['cumulative', 'overall qty', 'total qty', 'cum qty', 'cumulative qty'],
-            # Lower priority - abbreviated patterns (removed problematic 'no', 'number' that match 'Sl. No.')
-            ['qty', 'qnty', 'quant', 'volume', 'count', 'overall', 'cum', 'qtty', 'amount', 'nos', 'nos.']
+            ['cumulative', 'overall qty', 'total qty', 'cum qty', 'cumulative qty', 'variation qty', 'var qty', 'variance qty'],
+            # Lower priority - abbreviated patterns (removed problematic 'nos' that could match 'nos.' in 'item nos.')
+            ['qty', 'qnty', 'quant', 'volume', 'count', 'overall', 'cum', 'qtty', 'amount', 'variation', 'var']
         ]
         qty_col = None
         
@@ -350,6 +369,15 @@ class AdvancedBOQExtractor:
         for priority_level, patterns in enumerate(qty_patterns_priority):
             for col in df.columns:
                 col_lower = str(col).lower().strip()
+                
+                # SKIP if this is clearly a serial number column
+                if any(serial_pattern in col_lower for serial_pattern in serial_exclusion_patterns):
+                    continue
+                    
+                # SKIP if this is already identified as description or unit column
+                if col == desc_col or col == unit_col:
+                    continue
+                    
                 if any(qty_name in col_lower for qty_name in patterns):
                     qty_col = col
                     logger.info(f"✅ QUANTITY COLUMN FOUND (Priority {priority_level+1}): '{col}'")
@@ -358,10 +386,14 @@ class AdvancedBOQExtractor:
                 break
         
         if not qty_col:
-            # Look for numeric columns
+            # Look for numeric columns (excluding serial number columns)
             numeric_cols = df.select_dtypes(include=['int64', 'float64', 'Int64', 'Float64']).columns
             for col in numeric_cols:
-                if col not in [desc_col, unit_col]:
+                col_lower = str(col).lower().strip()
+                
+                # SKIP if this is a serial number column, description column, or unit column
+                if (col not in [desc_col, unit_col] and 
+                    not any(serial_pattern in col_lower for serial_pattern in serial_exclusion_patterns)):
                     # Check if values look like quantities
                     sample_values = df[col].dropna().head(10)
                     if len(sample_values) > 0 and all(val >= 0 for val in sample_values):
@@ -370,9 +402,12 @@ class AdvancedBOQExtractor:
                         break
         
         if not qty_col:
-            # Look for text columns with numeric content
+            # Look for text columns with numeric content (excluding serial number columns)
             for col in df.columns:
-                if df[col].dtype == 'object' and col not in [desc_col, unit_col]:
+                col_lower = str(col).lower().strip()
+                
+                if (df[col].dtype == 'object' and col not in [desc_col, unit_col] and
+                    not any(serial_pattern in col_lower for serial_pattern in serial_exclusion_patterns)):
                     numeric_count = 0
                     total_count = 0
                     for value in df[col].dropna().head(10):
@@ -413,6 +448,9 @@ class AdvancedBOQExtractor:
             "error_message": ""
         }
         
+        # Serial number exclusion patterns - these columns should NEVER be identified as description/quantity columns
+        serial_exclusion_patterns = ['item no', 'sl. no', 'sl.no', 'slno', 's.no', 's no', 'sr. no', 'sr.no', 'srno', 'serial', 'serial no', 'sno', 'item number', 'row number', 'line no', 'entry no']
+        
         # Enhanced patterns with priority - exact matches first
         desc_patterns_priority = [
             ['description'],
@@ -430,9 +468,10 @@ class AdvancedBOQExtractor:
         
         qty_patterns_priority = [
             ['quantity'],
-            ['cumulative quantity', 'overall quantity', 'total quantity', 'net quantity', 'gross quantity'],
-            ['cumulative', 'overall qty', 'total qty', 'cum qty', 'cumulative qty'],
-            ['qty', 'qnty', 'quant', 'volume', 'count', 'number', 'overall', 'cum', 'qtty', 'amount', 'nos', 'no', 'no.', 'nos.', 'total']
+            ['cumulative quantity', 'overall quantity', 'total quantity', 'net quantity', 'gross quantity', 'variation in quantity', 'variation in qty'],
+            ['cumulative', 'overall qty', 'total qty', 'cum qty', 'cumulative qty', 'variation qty', 'var qty', 'variance qty'],
+            # Removed problematic 'no', 'no.', 'nos', 'nos.' that match "Item No." - replaced with safer patterns
+            ['qty', 'qnty', 'quant', 'volume', 'count', 'overall', 'cum', 'qtty', 'amount', 'variation', 'var', 'total']
         ]
         
         # Find description column
@@ -441,6 +480,11 @@ class AdvancedBOQExtractor:
         for priority_level, patterns in enumerate(desc_patterns_priority):
             for idx, header in enumerate(header_names):
                 header_lower = str(header).lower().strip()
+                
+                # SKIP if this is clearly a serial number column
+                if any(serial_pattern in header_lower for serial_pattern in serial_exclusion_patterns):
+                    continue
+                    
                 if any(desc_name in header_lower for desc_name in patterns):
                     desc_col_idx = idx  # Store column index for extraction
                     desc_col_name = header  # Store header name for logging
@@ -461,6 +505,12 @@ class AdvancedBOQExtractor:
         for priority_level, patterns in enumerate(unit_patterns_priority):
             for idx, header in enumerate(header_names):
                 header_lower = str(header).lower().strip()
+                
+                # SKIP if this is clearly a serial number column or already identified as description
+                if (any(serial_pattern in header_lower for serial_pattern in serial_exclusion_patterns) or 
+                    idx == desc_col_idx):
+                    continue
+                    
                 if any(unit_name in header_lower for unit_name in patterns):
                     unit_col_idx = idx  # Store column index for extraction
                     unit_col_name = header  # Store header name for logging
@@ -482,8 +532,9 @@ class AdvancedBOQExtractor:
             for idx, header in enumerate(header_names):
                 header_lower = str(header).lower().strip()
                 
-                # Skip serial number columns explicitly (they often contain 'no' which matches quantity patterns)
-                if any(serial_pattern in header_lower for serial_pattern in ['sl.', 'sl ', 'serial', 's.no', 's no', 's.n']):
+                # SKIP if this is clearly a serial number column or already identified columns
+                if (any(serial_pattern in header_lower for serial_pattern in serial_exclusion_patterns) or 
+                    idx == desc_col_idx or idx == unit_col_idx):
                     continue
                 
                 if any(qty_name in header_lower for qty_name in patterns):
